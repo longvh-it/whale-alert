@@ -1,0 +1,10 @@
+.env
+*.db
+*.db-shm
+*.db-wal
+logs/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.python-version

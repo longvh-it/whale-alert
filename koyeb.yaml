@@ -1,0 +1,38 @@
+name: whale-bot
+services:
+  - name: whale-bot
+    type: worker
+    git:
+      repository: github.com/YOUR_USERNAME/YOUR_REPO
+      branch: main
+    docker:
+      dockerfile: Dockerfile
+    instance_types:
+      - type: nano
+    regions:
+      - par
+    env:
+      - key: TELEGRAM_BOT_TOKEN
+        secret: true
+      - key: ADMIN_CHAT_ID
+        secret: true
+      - key: MIN_TRADE_SIZE_USD
+        value: "100000"
+      - key: MIN_POSITION_SIZE_USD
+        value: "500000"
+      - key: MIN_LIQUIDATION_SIZE_USD
+        value: "200000"
+      - key: MIN_PNL_ALERT_USD
+        value: "50000"
+      - key: ALERT_COOLDOWN_SECONDS
+        value: "300"
+      - key: DB_PATH
+        value: "/tmp/whale_bot.db"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: LOG_FILE
+        value: "false"
+      - key: SIGNAL_CHANNEL_ID
+        value: "@signalfuturegodfather"
+      - key: AUTO_SIGNAL_ENABLED
+        value: "true"

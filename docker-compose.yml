@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  whale-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - DB_PATH=/app/data/whale_bot.db

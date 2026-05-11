@@ -1,0 +1,13 @@
+.env
+*.db
+*.db-shm
+*.db-wal
+logs/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+README.md
+docker-compose.yml
