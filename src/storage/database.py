@@ -558,6 +558,19 @@ class Database:
             )
             await db.commit()
 
+    async def has_active_signal(self, coin: str) -> bool:
+        """Trả về True nếu đã có kèo đang mở cho coin này (bất kể chiều)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT 1 FROM signals "
+                "WHERE coin=? "
+                "AND status IN ('PENDING','ACTIVE') "
+                "AND closed_at IS NULL "
+                "LIMIT 1",
+                (coin,),
+            )
+            return await cursor.fetchone() is not None
+
     async def get_signal_stats(self) -> dict:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(

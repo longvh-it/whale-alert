@@ -13,6 +13,7 @@ from src.api.binance_ws import BinanceWS
 from src.api.bybit_ws import BybitWS
 from src.api.coinglass_rest import CoinglassRest
 from src.detector.whale_detector import WhaleDetector
+from src.detector.trend_detector import run_trend_poll
 from src.detector.alert_engine import AlertEngine
 from src.detector.oi_detector import OISpikeDetector
 from src.detector.funding_detector import FundingRateDetector
@@ -165,6 +166,13 @@ async def main():
     # Init position poller
     poller = PositionPoller(engine, interval=60)
 
+    # Trend detector — gộp tất cả coin cần theo dõi
+    trend_coins = list({
+        *config.auto_signal_major_coins,
+        *config.binance_symbols,
+        *config.bybit_symbols,
+    })
+
     # Build task list
     tasks = [
         dp.start_polling(bot, allowed_updates=["message", "callback_query"]),
@@ -174,6 +182,7 @@ async def main():
         oi_detector.run(),
         funding_det.run(),
         confluence.run(),
+        run_trend_poll(trend_coins),
     ]
     if binance_ws:
         tasks.append(binance_ws.start())

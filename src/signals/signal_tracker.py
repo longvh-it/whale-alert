@@ -351,22 +351,48 @@ class SignalTracker:
     ):
         if not config.auto_signal_enabled:
             return
-        if size_usd < config.auto_signal_min_usd:
+        min_usd = config.auto_signal_min_usd if coin.upper() in config.auto_signal_major_coins else config.auto_signal_min_usd_alt
+        if size_usd < min_usd:
+            return
+        if await db.has_active_signal(coin):
+            logger.debug(f"Auto-signal skipped: đã có kèo {coin} đang active")
             return
 
-        sl_pct = config.auto_signal_sl_pct / 100
-        rr = config.auto_signal_rr
+        # Kiểm tra trend — whale phải cùng chiều trend mới tạo kèo
+        from src.detector.trend_detector import get_trend
+        trend = get_trend(coin)
+        if trend is None:
+            logger.debug(f"Auto-signal skipped: chưa có trend data cho {coin}")
+            return
+        if trend.direction != direction:
+            logger.debug(
+                f"Auto-signal skipped: {coin} whale={direction} nhưng trend={trend.direction} "
+                f"(score={trend.score}/3)"
+            )
+            return
+        if trend.score < config.trend_min_score:
+            logger.debug(
+                f"Auto-signal skipped: {coin} trend score {trend.score} < {config.trend_min_score}"
+            )
+            return
+
+        # Tính TP/SL: dùng ATR nếu có, fallback về % cố định
+        atr = trend.atr if trend.atr > 0 else entry * (config.auto_signal_sl_pct / 100)
+        sl_dist = atr * config.trend_atr_sl_mult
+        tp_dist = atr * config.trend_atr_tp_mult
 
         if direction == "LONG":
-            sl = entry * (1 - sl_pct)
-            tp1 = entry * (1 + sl_pct * rr / 3)
-            tp2 = entry * (1 + sl_pct * rr * 2 / 3)
-            tp3 = entry * (1 + sl_pct * rr)
+            sl  = entry - sl_dist
+            tp1 = entry + tp_dist / 3
+            tp2 = entry + tp_dist * 2 / 3
+            tp3 = entry + tp_dist
         else:
-            sl = entry * (1 + sl_pct)
-            tp1 = entry * (1 - sl_pct * rr / 3)
-            tp2 = entry * (1 - sl_pct * rr * 2 / 3)
-            tp3 = entry * (1 - sl_pct * rr)
+            sl  = entry + sl_dist
+            tp1 = entry - tp_dist / 3
+            tp2 = entry - tp_dist * 2 / 3
+            tp3 = entry - tp_dist
+
+        note = f"Trend {trend.score}/3 | RSI {trend.rsi:.0f} | ATR {atr:.2f}"
 
         sig_id = await self.create_and_post(
             coin=coin,
@@ -379,9 +405,9 @@ class SignalTracker:
             leverage=leverage,
             source="WHALE",
             whale_address=whale_address,
-            note=None,
+            note=note,
         )
         logger.info(
-            f"Auto-signal #{sig_id} created: {direction} {coin} ${size_usd:,.0f} "
-            f"entry={entry} SL={sl:.2f} TP3={tp3:.2f}"
+            f"Auto-signal #{sig_id}: {direction} {coin} ${size_usd:,.0f} "
+            f"entry={entry} SL={sl:.2f} TP3={tp3:.2f} trend={trend.score}/3"
         )

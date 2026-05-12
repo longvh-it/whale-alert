@@ -31,6 +31,14 @@ class Config:
     auto_signal_sl_pct: float = float(os.getenv("AUTO_SIGNAL_SL_PCT", "3"))    # SL % từ entry
     auto_signal_rr: float = float(os.getenv("AUTO_SIGNAL_RR", "2"))             # R:R ratio (TP3)
     auto_signal_min_usd: float = float(os.getenv("AUTO_SIGNAL_MIN_USD", "500000"))
+    auto_signal_min_usd_alt: float = float(os.getenv("AUTO_SIGNAL_MIN_USD_ALT", "200000"))
+    auto_signal_major_coins: list = None  # populated below
+
+    # Trend Detector (4h klines)
+    trend_poll_interval: int = int(os.getenv("TREND_POLL_INTERVAL", "900"))   # 15 phút
+    trend_min_score: int = int(os.getenv("TREND_MIN_SCORE", "2"))              # indicator tối thiểu
+    trend_atr_sl_mult: float = float(os.getenv("TREND_ATR_SL_MULT", "1.5"))   # SL = entry ± ATR * mult
+    trend_atr_tp_mult: float = float(os.getenv("TREND_ATR_TP_MULT", "3.0"))   # TP3 = entry ± ATR * mult
 
     # Binance Futures WS
     binance_enabled: bool = os.getenv("BINANCE_ENABLED", "true").lower() == "true"
@@ -65,6 +73,9 @@ class Config:
         if self.bybit_symbols is None:
             raw = os.getenv("BYBIT_SYMBOLS", "BTC,ETH,SOL")
             self.bybit_symbols = [s.strip() for s in raw.split(",") if s.strip()]
+        if self.auto_signal_major_coins is None:
+            raw = os.getenv("AUTO_SIGNAL_MAJOR_COINS", "BTC,ETH")
+            self.auto_signal_major_coins = [s.strip().upper() for s in raw.split(",") if s.strip()]
 
 
 config = Config()
