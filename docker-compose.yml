@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   whale-bot:
     build: .
@@ -10,3 +8,11 @@ services:
       - ./logs:/app/logs
     environment:
       - DB_PATH=/app/data/whale_bot.db
+    networks:
+      - botnet
+
+networks:
+  botnet:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "1400"

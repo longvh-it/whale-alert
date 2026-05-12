@@ -61,8 +61,6 @@ class HyperliquidWS:
             await asyncio.sleep(0.3)
         logger.info(f"Subscribed to {len(coins)} trade channels")
 
-        # allMids không subscribe qua WS — dùng REST poll để tránh disconnect
-
         # Re-subscribe to all watched users (important on reconnect)
         for addr in list(self._watched_users):
             await ws.send(json.dumps({"method": "subscribe", "subscription": {"type": "userEvents", "user": addr}}))

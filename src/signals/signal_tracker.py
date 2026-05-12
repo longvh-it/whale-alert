@@ -41,6 +41,7 @@ def set_tracker(t: "SignalTracker"):
 _TP_LEVEL = {"TP1_HIT": 1, "TP2_HIT": 2, "TP3_HIT": 3}
 
 STATUS_LABEL = {
+    "PENDING":   "⏳ Chờ vào lệnh",
     "ACTIVE":    "🟡 Đang theo dõi",
     "TP1_HIT":   "🟢 TP1 đã chạm ✅",
     "TP2_HIT":   "🟢 TP2 đã chạm ✅✅",
@@ -99,10 +100,11 @@ class SignalTracker:
         source: str = "ADMIN",
         whale_address: Optional[str] = None,
         note: Optional[str] = None,
+        order_type: str = "MARKET",
     ) -> int:
         sig_id = await db.create_signal(
             coin, direction, entry, tp1, tp2, tp3, sl,
-            leverage, source, whale_address, note,
+            leverage, source, whale_address, note, order_type,
         )
         signal = await db.get_signal(sig_id)
         await self._post_to_channel(signal)
@@ -141,17 +143,31 @@ class SignalTracker:
                 )
         for s in to_remove:
             self._cache.remove(s)
+        # Refresh cache after status changes so PENDING→ACTIVE continues being tracked
+        if any(s["status"] == "ACTIVE" for s in self._cache):
+            self._cache_ts = 0.0
 
     @staticmethod
     def _evaluate(signal: dict, price: float) -> Optional[str]:
         d = signal["direction"]
         sl = signal["sl_price"]
+        entry = signal["entry_price"]
         tp1 = signal.get("tp1")
         tp2 = signal.get("tp2")
         tp3 = signal.get("tp3")
         status = signal["status"]
-        cur = _TP_LEVEL.get(status, 0)
 
+        # Limit order waiting for entry
+        if status == "PENDING":
+            sl_hit = (price <= sl) if d == "LONG" else (price >= sl)
+            if sl_hit:
+                return "SL_HIT"
+            entry_hit = (price <= entry) if d == "LONG" else (price >= entry)
+            if entry_hit:
+                return "ACTIVE"
+            return None
+
+        cur = _TP_LEVEL.get(status, 0)
         sl_hit = (price <= sl) if d == "LONG" else (price >= sl)
         if sl_hit:
             return "SL_HIT"
@@ -169,6 +185,8 @@ class SignalTracker:
 
     @staticmethod
     def _is_terminal(signal: dict, new_status: str) -> bool:
+        if new_status == "ACTIVE":
+            return False  # Limit order just activated
         if new_status in ("SL_HIT", "TP3_HIT", "CANCELLED"):
             return True
         if new_status == "TP2_HIT" and not signal.get("tp3"):
@@ -223,7 +241,10 @@ class SignalTracker:
             (d == "LONG" and price > entry) or (d == "SHORT" and price < entry)
         ) else "-"
 
-        if new_status == "SL_HIT":
+        if new_status == "ACTIVE":
+            header = f"📍 <b>VÀO LỆNH</b>"
+            body = f"{dir_emoji} {d} {coin}  <code>#{sig_id:04d}</code>\nLimit entry đã chạm: <b>${price:,.2f}</b>\n⚡ TP/SL tracking bắt đầu"
+        elif new_status == "SL_HIT":
             header = f"❌ <b>SL BỊ HIT</b>"
             body = f"{dir_emoji} {d} {coin}  <code>#{sig_id:04d}</code>\n📍 ${entry:,.2f} → <b>${price:,.2f}</b>\n💸 -{pct:.1f}%"
         elif new_status.startswith("TP"):
@@ -262,8 +283,10 @@ class SignalTracker:
         note = signal.get("note") or ""
         created = signal.get("created_at", "")
 
+        order_type = signal.get("order_type", "MARKET")
         dir_emoji = "🟢" if d == "LONG" else "🔴"
         lev_str = f"  ⚡<b>{lev}x</b>" if lev else ""
+        order_badge = "  <i>[LIMIT]</i>" if order_type == "LIMIT" else ""
         tp_reached = _TP_LEVEL.get(status, 0)
 
         def pct(price: float) -> str:
@@ -278,7 +301,7 @@ class SignalTracker:
         sl_emoji = "❌" if status == "SL_HIT" else "🛑"
 
         lines = [
-            f"{dir_emoji} <b>{d} {coin}</b>{lev_str}  <code>#{sig_id:04d}</code>",
+            f"{dir_emoji} <b>{d} {coin}</b>{lev_str}  <code>#{sig_id:04d}</code>{order_badge}",
             SEP,
             f"📍 Entry: <b>${entry:,.2f}</b>",
             SEP,

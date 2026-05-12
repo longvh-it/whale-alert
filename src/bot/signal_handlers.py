@@ -86,6 +86,9 @@ async def cmd_signal(msg: Message):
     usage = (
         "❌ Cú pháp:\n"
         "<code>/signal BTC LONG 95000 TP1:97000 TP2:99000 SL:93500</code>\n\n"
+        "Entry price:\n"
+        "• <b>mk</b> — dùng giá thị trường hiện tại (market)\n"
+        "• <b>95000</b> — giá cụ thể → lệnh limit (chờ giá chạm)\n\n"
         "Tham số:\n"
         "• <b>TP1, TP2, TP3</b> — mức chốt lời (ít nhất 1)\n"
         "• <b>SL</b> — cắt lỗ (bắt buộc)\n"
@@ -105,11 +108,30 @@ async def cmd_signal(msg: Message):
         await msg.answer("❌ Direction phải là <code>LONG</code> hoặc <code>SHORT</code>.", parse_mode="HTML")
         return
 
-    try:
-        entry = float(entry_str)
-    except ValueError:
-        await msg.answer("❌ Entry price không hợp lệ.")
-        return
+    tracker = st_module.get_tracker()
+
+    # Xác định entry price và order type
+    if entry_str.lower() in ("mk", "market"):
+        current = tracker.get_current_price(coin)
+        if not current:
+            await msg.answer(f"❌ Chưa có giá {coin}. Thử lại sau vài giây.")
+            return
+        entry = current
+        order_type = "MARKET"
+    else:
+        try:
+            entry = float(entry_str)
+        except ValueError:
+            await msg.answer("❌ Entry price không hợp lệ. Dùng số hoặc <code>mk</code>.", parse_mode="HTML")
+            return
+        # Nếu entry khác giá thị trường → limit order
+        current = tracker.get_current_price(coin)
+        if current:
+            is_limit = (direction == "LONG" and entry < current * 0.9995) or \
+                       (direction == "SHORT" and entry > current * 1.0005)
+            order_type = "LIMIT" if is_limit else "MARKET"
+        else:
+            order_type = "MARKET"
 
     # Parse NOTE before numeric kv (it can contain spaces)
     note = None
@@ -151,20 +173,20 @@ async def cmd_signal(msg: Message):
         await msg.answer(f"❌ {err}")
         return
 
-    tracker = st_module.get_tracker()
     sig_id = await tracker.create_and_post(
         coin=coin, direction=direction, entry=entry,
         tp1=tp1, tp2=tp2, tp3=tp3, sl=sl,
-        leverage=lev, source="ADMIN", note=note,
+        leverage=lev, source="ADMIN", note=note, order_type=order_type,
     )
 
     current = tracker.get_current_price(coin)
     price_str = f"${current:,.2f}" if current else "chưa có"
+    order_label = "📍 Market (kích hoạt ngay)" if order_type == "MARKET" else f"⏳ Limit (chờ giá chạm ${entry:,.2f})"
 
     await msg.answer(
         f"✅ <b>Kèo #{sig_id:04d} đã tạo!</b>\n\n"
         f"{('🟢' if direction=='LONG' else '🔴')} <b>{direction} {coin}</b>\n"
-        f"📍 Entry: <b>${entry:,.2f}</b>\n"
+        f"{order_label}\n"
         f"💰 Giá hiện tại: <b>{price_str}</b>\n\n"
         f"{'📢 Đã post lên channel.' if tracker._channel_id else '⚠️ Chưa cấu hình SIGNAL_CHANNEL_ID.'}",
         parse_mode="HTML",
