@@ -32,4 +32,39 @@ class Config:
     auto_signal_rr: float = float(os.getenv("AUTO_SIGNAL_RR", "2"))             # R:R ratio (TP3)
     auto_signal_min_usd: float = float(os.getenv("AUTO_SIGNAL_MIN_USD", "500000"))
 
+    # Binance Futures WS
+    binance_enabled: bool = os.getenv("BINANCE_ENABLED", "true").lower() == "true"
+    binance_symbols: list = None  # populated below
+
+    # Bybit Futures WS
+    bybit_enabled: bool = os.getenv("BYBIT_ENABLED", "true").lower() == "true"
+    bybit_symbols: list = None    # populated below
+
+    # Coinglass REST (optional API key)
+    coinglass_api_key: str = os.getenv("COINGLASS_API_KEY", "")
+    coinglass_poll_interval: int = int(os.getenv("COINGLASS_POLL_INTERVAL", "300"))
+
+    # OI Spike Detector
+    oi_spike_threshold: float = float(os.getenv("OI_SPIKE_THRESHOLD", "5.0"))
+    oi_poll_interval: int = int(os.getenv("OI_POLL_INTERVAL", "300"))
+
+    # Funding Rate Detector
+    funding_extreme_high: float = float(os.getenv("FUNDING_EXTREME_HIGH", "0.10"))
+    funding_extreme_low: float = float(os.getenv("FUNDING_EXTREME_LOW", "-0.05"))
+    funding_poll_interval: int = int(os.getenv("FUNDING_POLL_INTERVAL", "3600"))
+
+    # Confluence Scorer
+    confluence_enabled: bool = os.getenv("CONFLUENCE_ENABLED", "true").lower() == "true"
+    confluence_window: int = int(os.getenv("CONFLUENCE_WINDOW", "300"))
+    confluence_min_sources: int = int(os.getenv("CONFLUENCE_MIN_SOURCES", "3"))
+
+    def __post_init__(self):
+        if self.binance_symbols is None:
+            raw = os.getenv("BINANCE_SYMBOLS", "BTC,ETH,SOL,BNB,DOGE,AVAX")
+            self.binance_symbols = [s.strip() for s in raw.split(",") if s.strip()]
+        if self.bybit_symbols is None:
+            raw = os.getenv("BYBIT_SYMBOLS", "BTC,ETH,SOL")
+            self.bybit_symbols = [s.strip() for s in raw.split(",") if s.strip()]
+
+
 config = Config()

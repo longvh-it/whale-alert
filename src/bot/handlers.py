@@ -302,6 +302,58 @@ def _detect_active_preset(min_trade: float, min_liq: float) -> str | None:
     return None
 
 
+# ── /sources ───────────────────────────────────────────────
+@router.message(Command("sources"))
+async def cmd_sources(msg: Message):
+    def _tick(flag: bool) -> str:
+        return "✅" if flag else "❌"
+
+    lines = [
+        "📡 <b>Nguồn dữ liệu đang hoạt động</b>",
+        "",
+        f"✅ Hyperliquid (WebSocket)",
+        f"{_tick(config.binance_enabled)} Binance Futures (WebSocket)",
+        f"{_tick(config.bybit_enabled)} Bybit Futures (WebSocket)",
+        f"✅ Coinglass/Binance (REST, poll mỗi {config.coinglass_poll_interval}s)",
+        "",
+        "━━━━━━━━━━━━━━━━━",
+        f"📊 OI Detector: enabled  (threshold {config.oi_spike_threshold}%)",
+        f"💸 Funding Detector: enabled  (high={config.funding_extreme_high:+.2f}% / low={config.funding_extreme_low:+.2f}%)",
+        f"🎯 Confluence: {_tick(config.confluence_enabled)}  (min {config.confluence_min_sources} nguồn / {config.confluence_window}s window)",
+        "",
+        "<i>Dùng /confluence on|off để bật/tắt confluence alerts cho bạn.</i>",
+    ]
+    await msg.answer("\n".join(lines), parse_mode="HTML")
+
+
+# ── /confluence ─────────────────────────────────────────────
+@router.message(Command("confluence"))
+async def cmd_confluence(msg: Message):
+    parts = msg.text.split()
+    if len(parts) < 2 or parts[1].lower() not in ("on", "off"):
+        s = await db.get_user_settings(msg.chat.id)
+        if not s:
+            await msg.answer("Bạn chưa đăng ký. Gõ /start để bắt đầu.")
+            return
+        status = "✅ bật" if s.get("confluence_enabled", True) else "❌ tắt"
+        await msg.answer(
+            f"🎯 <b>Confluence alerts</b>: {status}\n\n"
+            f"Dùng <code>/confluence on</code> hoặc <code>/confluence off</code> để thay đổi.",
+            parse_mode="HTML",
+        )
+        return
+
+    enabled = parts[1].lower() == "on"
+    await db.add_user(msg.chat.id, msg.from_user.username or "")
+    await db.set_confluence_enabled(msg.chat.id, enabled)
+    status = "✅ bật" if enabled else "❌ tắt"
+    await msg.answer(
+        f"🎯 Confluence alerts đã <b>{status}</b>.\n\n"
+        f"<i>Bạn {'sẽ' if enabled else 'sẽ không'} nhận alerts khi nhiều nguồn cùng báo một chiều.</i>",
+        parse_mode="HTML",
+    )
+
+
 # ── fallback ───────────────────────────────────────────────
 @router.message()
 async def fallback(msg: Message):

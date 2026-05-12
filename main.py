@@ -9,8 +9,14 @@ from aiogram.types import BotCommand
 from config.settings import config
 from src.storage.database import db
 from src.api.hyperliquid_ws import HyperliquidWS, ws as hl_ws
+from src.api.binance_ws import BinanceWS
+from src.api.bybit_ws import BybitWS
+from src.api.coinglass_rest import CoinglassRest
 from src.detector.whale_detector import WhaleDetector
 from src.detector.alert_engine import AlertEngine
+from src.detector.oi_detector import OISpikeDetector
+from src.detector.funding_detector import FundingRateDetector
+from src.aggregator.confluence_scorer import ConfluenceScorer
 from src.bot.handlers import router
 from src.bot.signal_handlers import router as signal_router
 from src.bot.poller import PositionPoller
@@ -74,7 +80,9 @@ async def main():
         BotCommand(command="top",       description="Top PnL cao nhất đang theo dõi"),
         BotCommand(command="settings",  description="Xem cài đặt của bạn"),
         BotCommand(command="threshold", description="Đặt ngưỡng tùy chỉnh (trade/liq)"),
-        BotCommand(command="help",        description="Hướng dẫn sử dụng"),
+        BotCommand(command="sources",       description="Xem nguồn dữ liệu đang hoạt động"),
+        BotCommand(command="confluence",    description="Bật/tắt confluence alerts"),
+        BotCommand(command="help",          description="Hướng dẫn sử dụng"),
         BotCommand(command="signals",       description="Danh sách kèo gần nhất"),
         BotCommand(command="signal_stats",  description="[Admin] Thống kê win rate kèo"),
         BotCommand(command="signal_report", description="[Admin] Chi tiết kèo thắng/thua"),
@@ -97,9 +105,19 @@ async def main():
     if total_subs:
         logger.info(f"Loaded {len(all_watched)} watchlist + {len(known_whales)} known whales ({total_subs} total) for userEvents")
 
-    # Register handlers
+    # Init multi-source components
+    coinglass  = CoinglassRest(config)
+    confluence = ConfluenceScorer(engine, config)
+    oi_detector  = OISpikeDetector(coinglass, engine, config, confluence=confluence)
+    funding_det  = FundingRateDetector(coinglass, engine, config, confluence=confluence)
+
+    # Register Hyperliquid handlers
     async def on_trades(data):
-        await engine.process_trade_data(data)
+        alerts = detector.process_trades(data)
+        for a in alerts:
+            await engine._route_alert(a)
+            if a.direction in ("LONG", "SHORT"):
+                confluence.ingest(a.coin, a.direction, "hyperliquid", a.size_usd)
 
     async def on_user_events(data):
         watched_map = await db.get_all_watched_addresses()
@@ -108,17 +126,63 @@ async def main():
     hl_ws.on("trades", on_trades)
     hl_ws.on("userEvents", on_user_events)
 
+    # Init Binance WS
+    binance_ws = None
+    if config.binance_enabled:
+        binance_ws = BinanceWS(config)
+
+        async def on_binance_trade(payload):
+            await engine.process_binance_trade(payload)
+            direction = "LONG" if payload.get("side") == "BUY" else "SHORT"
+            confluence.ingest(payload.get("symbol", "?"), direction, "binance", payload.get("size_usd", 0))
+
+        async def on_binance_liq(payload):
+            await engine.process_binance_liquidation(payload)
+            confluence.ingest(payload.get("symbol", "?"), "SHORT", "liquidation", payload.get("size_usd", 0))
+
+        binance_ws.on("binance_trade", on_binance_trade)
+        binance_ws.on("binance_liquidation", on_binance_liq)
+        logger.info("Binance Futures WS: enabled")
+
+    # Init Bybit WS
+    bybit_ws = None
+    if config.bybit_enabled:
+        bybit_ws = BybitWS(config)
+
+        async def on_bybit_trade(payload):
+            await engine.process_bybit_trade(payload)
+            direction = "LONG" if payload.get("side") == "BUY" else "SHORT"
+            confluence.ingest(payload.get("symbol", "?"), direction, "bybit", payload.get("size_usd", 0))
+
+        async def on_bybit_liq(payload):
+            await engine.process_bybit_liquidation(payload)
+            confluence.ingest(payload.get("symbol", "?"), "SHORT", "liquidation", payload.get("size_usd", 0))
+
+        bybit_ws.on("bybit_trade", on_bybit_trade)
+        bybit_ws.on("bybit_liquidation", on_bybit_liq)
+        logger.info("Bybit Futures WS: enabled")
+
     # Init position poller
     poller = PositionPoller(engine, interval=60)
 
-    # Run everything concurrently
-    logger.success("All systems initialized. Starting tasks…")
-    await asyncio.gather(
+    # Build task list
+    tasks = [
         dp.start_polling(bot, allowed_updates=["message", "callback_query"]),
         hl_ws.connect(),
         poller.start(),
         signal_tracker.start_price_poll(interval=5),
-    )
+        oi_detector.run(),
+        funding_det.run(),
+        confluence.run(),
+    ]
+    if binance_ws:
+        tasks.append(binance_ws.start())
+    if bybit_ws:
+        tasks.append(bybit_ws.start())
+
+    # Run everything concurrently
+    logger.success("All systems initialized. Starting tasks…")
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":

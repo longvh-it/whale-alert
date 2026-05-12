@@ -8,12 +8,13 @@ from config.settings import config
 
 DB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
-    chat_id     INTEGER PRIMARY KEY,
-    username    TEXT,
-    joined_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_active   INTEGER DEFAULT 1,
-    min_trade   REAL DEFAULT 100000,
-    min_liq     REAL DEFAULT 200000
+    chat_id            INTEGER PRIMARY KEY,
+    username           TEXT,
+    joined_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_active          INTEGER DEFAULT 1,
+    min_trade          REAL DEFAULT 100000,
+    min_liq            REAL DEFAULT 200000,
+    confluence_enabled INTEGER DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS watchlist (
@@ -87,6 +88,7 @@ CREATE TABLE IF NOT EXISTS signals (
     sl_price        REAL NOT NULL,
     leverage        INTEGER,
     status          TEXT DEFAULT 'ACTIVE',
+    order_type      TEXT DEFAULT 'MARKET',
     source          TEXT DEFAULT 'ADMIN',
     whale_address   TEXT,
     channel_msg_id  INTEGER,
@@ -114,6 +116,14 @@ class Database:
                     await db.execute(f"ALTER TABLE known_whales ADD COLUMN {col} {typedef}")
                 except Exception:
                     pass
+            try:
+                await db.execute("ALTER TABLE signals ADD COLUMN order_type TEXT DEFAULT 'MARKET'")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE users ADD COLUMN confluence_enabled INTEGER DEFAULT 1")
+            except Exception:
+                pass
             await db.commit()
         logger.info(f"Database initialized: {self.db_path}")
 
@@ -137,21 +147,35 @@ class Database:
     async def get_active_users_with_thresholds(self) -> list[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT chat_id, min_trade, min_liq FROM users WHERE is_active = 1"
+                "SELECT chat_id, min_trade, min_liq, confluence_enabled FROM users WHERE is_active = 1"
             )
             rows = await cursor.fetchall()
-            return [{"chat_id": r[0], "min_trade": r[1], "min_liq": r[2]} for r in rows]
+            return [
+                {"chat_id": r[0], "min_trade": r[1], "min_liq": r[2], "confluence_enabled": bool(r[3])}
+                for r in rows
+            ]
+
+    async def set_confluence_enabled(self, chat_id: int, enabled: bool):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE users SET confluence_enabled = ? WHERE chat_id = ?",
+                (int(enabled), chat_id),
+            )
+            await db.commit()
 
     async def get_user_settings(self, chat_id: int) -> Optional[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT chat_id, username, min_trade, min_liq FROM users WHERE chat_id = ?",
+                "SELECT chat_id, username, min_trade, min_liq, confluence_enabled FROM users WHERE chat_id = ?",
                 (chat_id,),
             )
             row = await cursor.fetchone()
             if row:
-                return {"chat_id": row[0], "username": row[1],
-                        "min_trade": row[2], "min_liq": row[3]}
+                return {
+                    "chat_id": row[0], "username": row[1],
+                    "min_trade": row[2], "min_liq": row[3],
+                    "confluence_enabled": bool(row[4]) if row[4] is not None else True,
+                }
             return None
 
     async def update_user_threshold(self, chat_id: int, field: str, value: float):
@@ -456,13 +480,15 @@ class Database:
         source: str = "ADMIN",
         whale_address: Optional[str] = None,
         note: Optional[str] = None,
+        order_type: str = "MARKET",
     ) -> int:
+        initial_status = "PENDING" if order_type == "LIMIT" else "ACTIVE"
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "INSERT INTO signals (coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
-                "leverage, source, whale_address, note) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "leverage, status, order_type, source, whale_address, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (coin, direction, entry_price, tp1, tp2, tp3, sl_price,
-                 leverage, source, whale_address, note),
+                 leverage, initial_status, order_type, source, whale_address, note),
             )
             await db.commit()
             return cursor.lastrowid
@@ -471,7 +497,7 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "SELECT id, coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
-                "leverage, status, source, whale_address, channel_msg_id, note, created_at "
+                "leverage, status, order_type, source, whale_address, channel_msg_id, note, created_at "
                 "FROM signals WHERE id = ?",
                 (sig_id,),
             )
@@ -479,7 +505,7 @@ class Database:
             if not row:
                 return None
             cols = ["id", "coin", "direction", "entry_price", "tp1", "tp2", "tp3",
-                    "sl_price", "leverage", "status", "source", "whale_address",
+                    "sl_price", "leverage", "status", "order_type", "source", "whale_address",
                     "channel_msg_id", "note", "created_at"]
             return dict(zip(cols, row))
 
@@ -487,12 +513,12 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "SELECT id, coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
-                "leverage, status, source, whale_address, channel_msg_id, note, created_at "
-                "FROM signals WHERE status IN ('ACTIVE','TP1_HIT','TP2_HIT') AND closed_at IS NULL"
+                "leverage, status, order_type, source, whale_address, channel_msg_id, note, created_at "
+                "FROM signals WHERE status IN ('PENDING','ACTIVE','TP1_HIT','TP2_HIT') AND closed_at IS NULL"
             )
             rows = await cursor.fetchall()
             cols = ["id", "coin", "direction", "entry_price", "tp1", "tp2", "tp3",
-                    "sl_price", "leverage", "status", "source", "whale_address",
+                    "sl_price", "leverage", "status", "order_type", "source", "whale_address",
                     "channel_msg_id", "note", "created_at"]
             return [dict(zip(cols, r)) for r in rows]
 
@@ -500,13 +526,13 @@ class Database:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "SELECT id, coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
-                "leverage, status, source, whale_address, channel_msg_id, note, created_at "
+                "leverage, status, order_type, source, whale_address, channel_msg_id, note, created_at "
                 "FROM signals ORDER BY id DESC LIMIT ?",
                 (limit,),
             )
             rows = await cursor.fetchall()
             cols = ["id", "coin", "direction", "entry_price", "tp1", "tp2", "tp3",
-                    "sl_price", "leverage", "status", "source", "whale_address",
+                    "sl_price", "leverage", "status", "order_type", "source", "whale_address",
                     "channel_msg_id", "note", "created_at"]
             return [dict(zip(cols, r)) for r in rows]
 

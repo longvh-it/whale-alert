@@ -7,8 +7,13 @@ from src.storage.database import db
 from config.settings import config
 
 
+_ALWAYS_PASS = {"oi_spike", "funding_extreme", "confluence"}
+
+
 def _passes_threshold(alert: "WhaleAlert", min_trade: float, min_liq: float) -> bool:
     from src.detector.whale_detector import AlertType
+    if alert.alert_type.value in _ALWAYS_PASS:
+        return True
     if alert.alert_type == AlertType.LIQUIDATION:
         return alert.size_usd >= min_liq
     # BIG_TRADE, LARGE_POSITION, POSITION_FLIP, PNL_MILESTONE, WATCHLIST_TRADE
@@ -39,6 +44,30 @@ class AlertEngine:
     def __init__(self, bot: Bot, detector: WhaleDetector):
         self.bot = bot
         self.detector = detector
+
+    async def send_global_alert(self, alert: "WhaleAlert"):
+        """Broadcast an alert to all active users (used by OI/Funding/Confluence detectors)."""
+        await self._route_alert(alert)
+
+    async def process_binance_trade(self, payload: dict):
+        alerts = self.detector.on_binance_trade(payload)
+        for alert in alerts:
+            await self._route_alert(alert)
+
+    async def process_bybit_trade(self, payload: dict):
+        alerts = self.detector.on_bybit_trade(payload)
+        for alert in alerts:
+            await self._route_alert(alert)
+
+    async def process_binance_liquidation(self, payload: dict):
+        alerts = self.detector.on_binance_liquidation(payload)
+        for alert in alerts:
+            await self._route_alert(alert)
+
+    async def process_bybit_liquidation(self, payload: dict):
+        alerts = self.detector.on_bybit_liquidation(payload)
+        for alert in alerts:
+            await self._route_alert(alert)
 
     async def process_trade_data(self, data):
         alerts = self.detector.process_trades(data)
@@ -152,6 +181,9 @@ class AlertEngine:
             # Per-user threshold filter
             user = threshold_map.get(chat_id)
             if user and not _passes_threshold(alert, user["min_trade"], user["min_liq"]):
+                continue
+            # Confluence alerts respect user opt-out
+            if alert.alert_type.value == "confluence" and user and not user.get("confluence_enabled", True):
                 continue
 
             already = await db.was_alerted_recently(
