@@ -6,6 +6,20 @@ from loguru import logger
 from config.settings import config
 
 
+_dom_analyzer = None
+
+
+def _get_dom_analyzer():
+    global _dom_analyzer
+    if _dom_analyzer is None and config.dom_enabled:
+        try:
+            from src.detector.dom_analyzer import dom_analyzer
+            _dom_analyzer = dom_analyzer
+        except Exception:
+            pass
+    return _dom_analyzer
+
+
 class HyperliquidWS:
     def __init__(self):
         self.url = config.hl_ws_url
@@ -61,6 +75,16 @@ class HyperliquidWS:
             await asyncio.sleep(0.3)
         logger.info(f"Subscribed to {len(coins)} trade channels")
 
+        # Subscribe L2 order book for DOM analysis
+        if config.dom_enabled:
+            for coin in config.dom_coins:
+                await ws.send(json.dumps({
+                    "method": "subscribe",
+                    "subscription": {"type": "l2Book", "coin": coin},
+                }))
+                await asyncio.sleep(0.2)
+            logger.info(f"Subscribed to L2 order book for {len(config.dom_coins)} DOM coins")
+
         # Re-subscribe to all watched users (important on reconnect)
         for addr in list(self._watched_users):
             await ws.send(json.dumps({"method": "subscribe", "subscription": {"type": "userEvents", "user": addr}}))
@@ -97,10 +121,27 @@ class HyperliquidWS:
                     await self._dispatch("trades", data)
                 elif channel == "userEvents":
                     await self._dispatch("userEvents", data)
+                elif channel == "l2Book":
+                    await self._handle_l2_book(data)
                 elif channel == "pong":
                     logger.debug("pong")
             except json.JSONDecodeError:
                 pass
+
+    async def _handle_l2_book(self, data: dict):
+        dom = _get_dom_analyzer()
+        if dom is None:
+            return
+        try:
+            coin = data.get("coin", "")
+            levels = data.get("levels", [[], []])
+            bids = [[float(l["px"]), float(l["sz"])] for l in levels[0]] if levels[0] else []
+            asks = [[float(l["px"]), float(l["sz"])] for l in levels[1]] if levels[1] else []
+            mid = (bids[0][0] + asks[0][0]) / 2 if bids and asks else 0
+            if mid > 0:
+                await dom.process_l2_update(coin, bids, asks, mid)
+        except Exception as e:
+            logger.debug(f"L2 book parse error: {e}")
 
     def stop(self):
         self._running = False

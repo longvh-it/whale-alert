@@ -94,6 +94,23 @@ class Config:
     # Signal quality score
     signal_min_quality_score: int = int(os.getenv("SIGNAL_MIN_QUALITY_SCORE", "50"))
 
+    # DOM (Order Book) Analysis
+    dom_enabled: bool = os.getenv("DOM_ENABLED", "true").lower() == "true"
+    dom_coins: list = None  # populated below
+    dom_wall_min_usd: float = float(os.getenv("DOM_WALL_MIN_USD", "1000000"))
+    dom_wall_distance_max_pct: float = float(os.getenv("DOM_WALL_DISTANCE_MAX_PCT", "1.5"))
+    dom_bid_ask_bullish: float = float(os.getenv("DOM_BID_ASK_BULLISH", "1.5"))
+    dom_bid_ask_bearish: float = float(os.getenv("DOM_BID_ASK_BEARISH", "0.67"))
+    dom_absorption_pct_threshold: float = float(os.getenv("DOM_ABSORPTION_PCT_THRESHOLD", "25"))
+    dom_book_depth_levels: int = int(os.getenv("DOM_BOOK_DEPTH_LEVELS", "20"))
+
+    # Ecosystem Call
+    ecosystem_enabled: bool = os.getenv("ECOSYSTEM_ENABLED", "true").lower() == "true"
+    ecosystem_volume_spike_min: float = float(os.getenv("ECOSYSTEM_VOLUME_SPIKE_MIN", "2.5"))
+    ecosystem_call_min_trend_score: int = int(os.getenv("ECOSYSTEM_CALL_MIN_TREND_SCORE", "2"))
+    ecosystem_signal_quality_penalty: int = int(os.getenv("ECOSYSTEM_SIGNAL_QUALITY_PENALTY", "15"))
+    ecosystem_map: dict = None  # populated below
+
     def __post_init__(self):
         if self.binance_symbols is None:
             raw = os.getenv("BINANCE_SYMBOLS", "BTC,ETH,SOL,BNB,DOGE,AVAX")
@@ -104,6 +121,27 @@ class Config:
         if self.auto_signal_major_coins is None:
             raw = os.getenv("AUTO_SIGNAL_MAJOR_COINS", "BTC,ETH")
             self.auto_signal_major_coins = [s.strip().upper() for s in raw.split(",") if s.strip()]
+        if self.dom_coins is None:
+            raw = os.getenv("DOM_COINS", "BTC,ETH,SOL,BNB,ARB,OP")
+            self.dom_coins = [s.strip().upper() for s in raw.split(",") if s.strip()]
+        if self.ecosystem_map is None:
+            self.ecosystem_map = {
+                "SOL":    ["JUP", "RAY", "BONK", "JTO", "PYTH", "WIF", "DRIFT"],
+                "ETH":    ["ARB", "OP", "MATIC", "LDO", "RPL"],
+                "ARB":    ["GMX", "PENDLE", "RDNT"],
+                "OP":     ["VELO", "SNX"],
+                "FET":    ["AGIX", "TAO", "RENDER", "OCEAN"],
+                "TAO":    ["FET", "AGIX", "RENDER"],
+                "RENDER": ["FET", "AGIX", "TAO"],
+                "BNB":    ["CAKE", "TWT", "XVS"],
+                "AAVE":   ["UNI", "CRV", "MKR", "COMP"],
+                "UNI":    ["AAVE", "CRV", "SUSHI"],
+                "AXS":    ["SAND", "MANA", "GALA", "IMX"],
+                "IMX":    ["AXS", "GODS"],
+                "ATOM":   ["OSMO", "INJ", "TIA", "DYDX"],
+                "INJ":    ["ATOM", "OSMO", "TIA"],
+                "MKR":    ["AAVE", "COMP"],
+            }
 
 
 config = Config()

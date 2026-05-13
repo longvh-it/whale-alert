@@ -11,13 +11,14 @@ _SIGNAL_COLS = [
     "sl_price", "leverage", "status", "order_type", "source", "whale_address",
     "channel_msg_id", "note", "created_at",
     "sl_moved_to_entry", "sl_move_reason", "close_reason", "close_price",
-    "reversal_score", "quality_score",
+    "reversal_score", "quality_score", "source_detail",
 ]
 
 _SIGNAL_SELECT = (
     "SELECT id, coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
     "leverage, status, order_type, source, whale_address, channel_msg_id, note, created_at, "
-    "sl_moved_to_entry, sl_move_reason, close_reason, close_price, reversal_score, quality_score "
+    "sl_moved_to_entry, sl_move_reason, close_reason, close_price, reversal_score, quality_score, "
+    "source_detail "
     "FROM signals"
 )
 
@@ -148,6 +149,7 @@ class Database:
                 ("close_price",       "REAL"),
                 ("reversal_score",    "INTEGER"),
                 ("quality_score",     "INTEGER DEFAULT 0"),
+                ("source_detail",     "TEXT"),
             ]:
                 try:
                     await db.execute(f"ALTER TABLE signals ADD COLUMN {col} {typedef}")
@@ -511,15 +513,17 @@ class Database:
         note: Optional[str] = None,
         order_type: str = "MARKET",
         quality_score: int = 0,
+        source_detail: Optional[str] = None,
     ) -> int:
         initial_status = "PENDING" if order_type == "LIMIT" else "ACTIVE"
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "INSERT INTO signals (coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
-                "leverage, status, order_type, source, whale_address, note, quality_score) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "leverage, status, order_type, source, whale_address, note, quality_score, source_detail) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (coin, direction, entry_price, tp1, tp2, tp3, sl_price,
-                 leverage, initial_status, order_type, source, whale_address, note, quality_score),
+                 leverage, initial_status, order_type, source, whale_address, note,
+                 quality_score, source_detail),
             )
             await db.commit()
             return cursor.lastrowid

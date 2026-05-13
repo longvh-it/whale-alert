@@ -140,11 +140,12 @@ class SignalTracker:
         note: Optional[str] = None,
         order_type: str = "MARKET",
         quality_score: int = 0,
+        source_detail: Optional[str] = None,
     ) -> int:
         sig_id = await db.create_signal(
             coin, direction, entry, tp1, tp2, tp3, sl,
             leverage, source, whale_address, note, order_type,
-            quality_score=quality_score,
+            quality_score=quality_score, source_detail=source_detail,
         )
         keo = await db.get_signal(sig_id)
         await self._post_to_channel(keo)
@@ -533,11 +534,6 @@ class SignalTracker:
             is_major = coin.upper() in config.auto_signal_major_coins
             min_score = config.reversal_min_score if is_major else config.reversal_alt_min_score
 
-            # TP1_HIT with SL already moved — let SL handle it naturally unless very strong signal
-            if keo["status"] == "TP1_HIT" and keo.get("sl_moved_to_entry"):
-                if score < min_score + 1:
-                    continue
-
             if score >= min_score:
                 await self._close_signal_early(keo, price, score, reasons)
 
@@ -705,6 +701,8 @@ class SignalTracker:
         trend_confirmed: int,
         confluence_score: int,
         volume_ratio: float = 1.0,
+        dom_snapshot=None,
+        signal_direction: str = "",
     ) -> int:
         score = 0
         score += trend_confirmed * 10             # max 30
@@ -723,7 +721,18 @@ class SignalTracker:
             score += 4
         else:
             score += 1
-        return min(score, 100)
+
+        # Task 8 — DOM confirmation bonus/penalty (max 15 / -10)
+        if dom_snapshot and signal_direction:
+            expected_dom = "BULLISH" if signal_direction == "LONG" else "BEARISH"
+            if dom_snapshot.signal == expected_dom and dom_snapshot.signal_strength >= 2:
+                score += 15
+            elif dom_snapshot.signal == expected_dom and dom_snapshot.signal_strength == 1:
+                score += 7
+            elif dom_snapshot.signal not in ("NEUTRAL", expected_dom):
+                score -= 10
+
+        return min(max(score, 0), 100)
 
     # ── Telegram messaging ─────────────────────────────────
     async def _post_to_channel(self, keo: dict):
@@ -874,6 +883,9 @@ class SignalTracker:
         if source == "WHALE" and whale:
             short = f"{whale[:6]}…{whale[-4:]}"
             lines.append(f"🔎 Nguồn: 🐋 Whale <code>{short}</code>")
+        elif source == "ECOSYSTEM":
+            source_detail = keo.get("source_detail") or ""
+            lines.append(f"🔎 Nguồn: 🌐 Ecosystem  <i>{source_detail}</i>")
         else:
             lines.append(f"🔎 Nguồn: 👨‍💼 Admin")
 
@@ -957,13 +969,29 @@ class SignalTracker:
             tp2 = entry - tp_dist * 2 / 3
             tp3 = entry - tp_dist
 
+        # Task 8 — DOM check
+        dom_snapshot = None
+        if config.dom_enabled and coin.upper() in config.dom_coins:
+            from src.detector.dom_analyzer import dom_analyzer
+            dom_snapshot = dom_analyzer.get_snapshot(coin.upper())
+            if dom_snapshot:
+                opposite_dom = "BEARISH" if direction == "LONG" else "BULLISH"
+                if dom_snapshot.signal == opposite_dom and dom_snapshot.signal_strength >= 2:
+                    logger.info(
+                        f"Auto-signal skipped: DOM {dom_snapshot.signal} "
+                        f"(strength={dom_snapshot.signal_strength}) opposes {direction} {coin}"
+                    )
+                    return
+
         note = f"Multi-TF {confirmed}/3 | RSI {trend.rsi:.0f} | ATR {atr:.2f}"
 
-        # Task 6 — quality score
+        # Task 6 — quality score (with DOM)
         quality = self._calc_signal_quality(
             whale_size_usd=size_usd,
             trend_confirmed=confirmed,
             confluence_score=0,
+            dom_snapshot=dom_snapshot,
+            signal_direction=direction,
         )
         if quality < config.signal_min_quality_score:
             logger.info(
@@ -988,4 +1016,90 @@ class SignalTracker:
         logger.info(
             f"Auto-signal #{sig_id}: {direction} {coin} ${size_usd:,.0f} "
             f"entry={entry} SL={sl:.2f} TP3={tp3:.2f} trend={confirmed}/3 quality={quality}"
+        )
+
+    # ── Ecosystem signal ───────────────────────────────────
+    async def maybe_create_ecosystem_signal(self, eco):
+        """
+        Tạo kèo từ ecosystem signal (secondary signal).
+        eco: EcosystemSignal dataclass from ecosystem_detector.
+        """
+        if not config.auto_signal_enabled:
+            return
+
+        coin = eco.target_coin.upper()
+        direction = eco.target_trend
+
+        if await db.has_active_signal(coin):
+            logger.debug(f"Ecosystem signal skipped: đã có kèo {coin} đang active")
+            return
+
+        from src.detector.trend_detector import get_trend
+        trend = get_trend(coin)
+        if trend is None:
+            logger.debug(f"Ecosystem signal skipped: no 4h trend for {coin}")
+            return
+
+        atr = trend.atr if trend.atr > 0 else 0
+        if atr == 0:
+            logger.debug(f"Ecosystem signal skipped: ATR=0 for {coin}")
+            return
+
+        current_price = self._prices.get(coin)
+        if current_price is None:
+            logger.debug(f"Ecosystem signal skipped: no price for {coin}")
+            return
+
+        sl_dist = atr * config.trend_atr_sl_mult
+        tp_dist = atr * config.trend_atr_tp_mult
+
+        if direction == "LONG":
+            sl  = current_price - sl_dist
+            tp1 = current_price + tp_dist / 3
+            tp2 = current_price + tp_dist * 2 / 3
+            tp3 = current_price + tp_dist
+        else:
+            sl  = current_price + sl_dist
+            tp1 = current_price - tp_dist / 3
+            tp2 = current_price - tp_dist * 2 / 3
+            tp3 = current_price - tp_dist
+
+        # Quality score with ecosystem penalty
+        dom_snapshot = None
+        if config.dom_enabled and coin in config.dom_coins:
+            from src.detector.dom_analyzer import dom_analyzer
+            dom_snapshot = dom_analyzer.get_snapshot(coin)
+
+        quality = self._calc_signal_quality(
+            whale_size_usd=0,
+            trend_confirmed=eco.target_trend_score,
+            confluence_score=0,
+            dom_snapshot=dom_snapshot,
+            signal_direction=direction,
+        ) - config.ecosystem_signal_quality_penalty
+
+        if quality < config.signal_min_quality_score:
+            logger.info(
+                f"Ecosystem signal {coin} quality too low ({quality}), skip"
+            )
+            return
+
+        note = f"Ecosystem: {eco.trigger_coin} spike {eco.trigger_volume_ratio:.1f}x | {' + '.join(eco.reason)}"
+
+        sig_id = await self.create_and_post(
+            coin=coin,
+            direction=direction,
+            entry=round(current_price, 4),
+            tp1=round(tp1, 4),
+            tp2=round(tp2, 4),
+            tp3=round(tp3, 4),
+            sl=round(sl, 4),
+            source="ECOSYSTEM",
+            source_detail=f"trigger:{eco.trigger_coin}",
+            note=note,
+            quality_score=max(quality, 0),
+        )
+        logger.info(
+            f"Ecosystem signal #{sig_id}: {direction} {coin} "
+            f"trigger={eco.trigger_coin} quality={quality}"
         )

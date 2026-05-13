@@ -182,13 +182,13 @@ def _compute_trend(
 BINANCE_FUTURES_KLINES = "https://fapi.binance.com/fapi/v1/klines"
 
 
-async def _fetch_klines(
+async def _fetch_klines_raw(
     session: aiohttp.ClientSession,
     symbol: str,
     timeframe: str = "4h",
     limit: int = 60,
-) -> Optional[dict]:
-    """Fetch klines từ Binance Futures. Trả về {closes, highs, lows} hoặc None."""
+) -> Optional[list]:
+    """Fetch klines từ Binance Futures. Trả về raw list hoặc None."""
     params = {"symbol": f"{symbol}USDT", "interval": timeframe, "limit": limit}
     try:
         async with session.get(
@@ -197,18 +197,55 @@ async def _fetch_klines(
             if r.status != 200:
                 logger.warning(f"TrendDetector: Binance klines {symbol} [{timeframe}] status {r.status}")
                 return None
-            data = await r.json()
-            # [open_time, open, high, low, close, volume, ...]
-            closes = [float(c[4]) for c in data]
-            highs  = [float(c[2]) for c in data]
-            lows   = [float(c[3]) for c in data]
-            return {"closes": closes, "highs": highs, "lows": lows}
+            return await r.json()
     except Exception as e:
         logger.warning(f"TrendDetector: fetch {symbol} [{timeframe}] error: {e}")
         return None
 
 
+async def _fetch_klines(
+    session: aiohttp.ClientSession,
+    symbol: str,
+    timeframe: str = "4h",
+    limit: int = 60,
+) -> Optional[dict]:
+    """Fetch klines từ Binance Futures. Trả về {closes, highs, lows} hoặc None."""
+    data = await _fetch_klines_raw(session, symbol, timeframe, limit)
+    if data is None:
+        return None
+    closes = [float(c[4]) for c in data]
+    highs  = [float(c[2]) for c in data]
+    lows   = [float(c[3]) for c in data]
+    return {"closes": closes, "highs": highs, "lows": lows}
+
+
 # ── Multi-timeframe poll loop ───────────────────────────────
+
+async def _check_volume_spike(coin: str, klines_raw: list, direction_from_close: bool = True):
+    """
+    So sánh volume nến hiện tại với MA20 volume.
+    Gọi ecosystem_detector.on_volume_spike() nếu đủ ngưỡng.
+    """
+    if len(klines_raw) < 21:
+        return
+    try:
+        from src.detector.ecosystem_detector import ecosystem_detector
+        from config.settings import config as _cfg
+        volumes = [float(k[5]) for k in klines_raw]
+        current_vol = volumes[-1]
+        ma20_vol = sum(volumes[-21:-1]) / 20
+        if ma20_vol == 0:
+            return
+        ratio = current_vol / ma20_vol
+        if ratio >= _cfg.ecosystem_volume_spike_min:
+            open_price = float(klines_raw[-1][1])
+            close_price = float(klines_raw[-1][4])
+            direction = "LONG" if close_price >= open_price else "SHORT"
+            logger.info(f"Volume spike {coin}: {ratio:.1f}x MA20, direction={direction}")
+            await ecosystem_detector.on_volume_spike(coin, ratio, direction)
+    except Exception as e:
+        logger.debug(f"_check_volume_spike error: {e}")
+
 
 async def run_trend_poll(coins: list[str], interval: int = None):
     """Polls 1h/4h/1d klines với interval riêng biệt cho mỗi timeframe."""
@@ -232,14 +269,20 @@ async def run_trend_poll(coins: list[str], interval: int = None):
             for tf, cfg_tf in tf_config.items():
                 if now - last_poll[tf] >= cfg_tf["interval"]:
                     for coin in coins:
-                        klines = await _fetch_klines(session, coin, tf, cfg_tf["limit"])
-                        if klines:
-                            state = _compute_trend(**klines, timeframe=tf)
+                        klines_raw = await _fetch_klines_raw(session, coin, tf, cfg_tf["limit"])
+                        if klines_raw:
+                            closes = [float(c[4]) for c in klines_raw]
+                            highs  = [float(c[2]) for c in klines_raw]
+                            lows   = [float(c[3]) for c in klines_raw]
+                            state = _compute_trend(closes=closes, highs=highs, lows=lows, timeframe=tf)
                             _trend_cache.setdefault(coin.upper(), {})[tf] = state
                             logger.debug(
                                 f"Trend {coin} [{tf}]: {state.direction} {state.score}/3 "
                                 f"RSI={state.rsi:.1f} ATR={state.atr:.2f}"
                             )
+                            # Check volume spike on 4h candle for ecosystem detection
+                            if tf == "4h":
+                                await _check_volume_spike(coin.upper(), klines_raw)
                         await asyncio.sleep(0.3)
                     last_poll[tf] = time.time()
             await asyncio.sleep(60)
