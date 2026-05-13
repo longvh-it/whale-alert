@@ -688,7 +688,7 @@ class SignalTracker:
         text = (
             f"🚫 <b>AUTO-SIGNAL TẠM DỪNG</b>\n\n"
             f"Đã có {sl_count} kèo SL hôm nay.\n"
-            f"Auto-signal tắt đến 00:00 UTC.\n"
+            f"Auto-signal tắt đến 07:00 sáng (00:00 UTC).\n"
             f"Dùng /signal để tạo kèo thủ công nếu cần."
         )
         try:
@@ -882,8 +882,8 @@ class SignalTracker:
 
         # Timestamp
         try:
-            dt = datetime.fromisoformat(str(created))
-            lines.append(f"⏰ {dt.strftime('%d/%m/%Y %H:%M')} UTC")
+            dt = datetime.fromisoformat(str(created)) + timedelta(hours=7)
+            lines.append(f"⏰ {dt.strftime('%d/%m/%Y %H:%M')} ICT")
         except Exception:
             pass
 

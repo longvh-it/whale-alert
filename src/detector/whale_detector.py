@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from loguru import logger
 from config.settings import config
@@ -42,7 +42,7 @@ class WhaleAlert:
                 f"{trend} OI {word} <b>{change:+.1f}%</b>",
                 f"💰 ${prev/1e9:.2f}B → <b>${curr/1e9:.2f}B</b>",
                 f"🔗 Source: Binance/Coinglass (aggregated)",
-                f"🕐 {self.timestamp.strftime('%H:%M:%S')} UTC",
+                f"🕐 {(self.timestamp + timedelta(hours=7)).strftime('%H:%M:%S')} ICT",
             ])
 
         # ── Funding Extreme ────────────────────────────────
@@ -65,7 +65,7 @@ class WhaleAlert:
             lines += [
                 f"⚠️ Thị trường đang {bias}",
                 f"💡 Lịch sử: thường precede {squeeze}",
-                f"🕐 {self.timestamp.strftime('%H:%M:%S')} UTC",
+                f"🕐 {(self.timestamp + timedelta(hours=7)).strftime('%H:%M:%S')} ICT",
             ]
             return "\n".join(lines)
 
@@ -98,7 +98,7 @@ class WhaleAlert:
             lines += [
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
                 "⚠️ <i>Không phải lời khuyên đầu tư</i>",
-                f"🕐 {self.timestamp.strftime('%H:%M:%S')} UTC",
+                f"🕐 {(self.timestamp + timedelta(hours=7)).strftime('%H:%M:%S')} ICT",
             ]
             return "\n".join(lines)
 
