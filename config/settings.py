@@ -65,6 +65,34 @@ class Config:
     confluence_enabled: bool = os.getenv("CONFLUENCE_ENABLED", "true").lower() == "true"
     confluence_window: int = int(os.getenv("CONFLUENCE_WINDOW", "300"))
     confluence_min_sources: int = int(os.getenv("CONFLUENCE_MIN_SOURCES", "3"))
+    confluence_min_score_weighted: int = int(os.getenv("CONFLUENCE_MIN_SCORE_WEIGHTED", "5"))
+
+    # Multi-timeframe Trend Detector
+    trend_poll_interval_1h: int = int(os.getenv("TREND_POLL_INTERVAL_1H", "300"))
+    trend_poll_interval_4h: int = int(os.getenv("TREND_POLL_INTERVAL_4H", "900"))
+    trend_poll_interval_1d: int = int(os.getenv("TREND_POLL_INTERVAL_1D", "3600"))
+
+    # TP1 Reversal — move SL to entry
+    tp1_reversal_move_sl_enabled: bool = os.getenv("TP1_REVERSAL_MOVE_SL_ENABLED", "true").lower() == "true"
+    tp1_reversal_min_score: int = int(os.getenv("TP1_REVERSAL_MIN_SCORE", "2"))
+    tp1_reversal_warn_score: int = int(os.getenv("TP1_REVERSAL_WARN_SCORE", "1"))
+
+    # Auto-cut on trend reversal
+    reversal_cut_enabled: bool = os.getenv("REVERSAL_CUT_ENABLED", "true").lower() == "true"
+    reversal_min_score: int = int(os.getenv("REVERSAL_MIN_SCORE", "2"))
+    reversal_grace_minutes: int = int(os.getenv("REVERSAL_GRACE_MINUTES", "60"))
+    reversal_alt_min_score: int = int(os.getenv("REVERSAL_ALT_MIN_SCORE", "3"))
+    reversal_check_interval: int = int(os.getenv("REVERSAL_CHECK_INTERVAL", "15"))
+
+    # Auto-cancel stale PENDING signals
+    signal_pending_timeout_hours: float = float(os.getenv("SIGNAL_PENDING_TIMEOUT_HOURS", "4.0"))
+
+    # Daily loss limit
+    daily_sl_limit: int = int(os.getenv("DAILY_SL_LIMIT", "3"))
+    daily_loss_limit_enabled: bool = os.getenv("DAILY_LOSS_LIMIT_ENABLED", "true").lower() == "true"
+
+    # Signal quality score
+    signal_min_quality_score: int = int(os.getenv("SIGNAL_MIN_QUALITY_SCORE", "50"))
 
     def __post_init__(self):
         if self.binance_symbols is None:

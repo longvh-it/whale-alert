@@ -1,9 +1,10 @@
 """
-Trend Detector — poll Binance Futures 4h klines, tính EMA/RSI/MACD.
+Trend Detector — poll Binance Futures klines (1h/4h/1d), tính EMA/RSI/MACD.
 Cung cấp trend direction + ATR cho signal_tracker.
 """
 import asyncio
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Optional
 import aiohttp
 from loguru import logger
@@ -13,21 +14,45 @@ from config.settings import config
 
 @dataclass
 class TrendState:
-    direction: str        # "LONG" | "SHORT" | "NEUTRAL"
-    score: int            # 0-3 (số indicator đồng thuận)
-    atr: float            # ATR(14) trên 4h, tính bằng USD
+    direction: str          # "LONG" | "SHORT" | "NEUTRAL"
+    score: int              # 0-3 (số indicator đồng thuận)
+    atr: float              # ATR(14), tính bằng USD
     ema20: float
     ema50: float
     rsi: float
-    macd_hist: float      # MACD histogram (positive = bullish)
+    macd_hist: float        # MACD histogram (positive = bullish)
+    macd_hist_prev: float = 0.0
+    macd_line: float = 0.0
+    macd_signal_line: float = 0.0   # tránh collision với module signal
+    timeframe: str = "4h"
 
 
-# coin → TrendState
-_trend_cache: dict[str, TrendState] = {}
+# coin → {timeframe → TrendState}
+_trend_cache: dict[str, dict[str, TrendState]] = {}
 
 
 def get_trend(coin: str) -> Optional[TrendState]:
-    return _trend_cache.get(coin.upper())
+    """Backward-compat: trả về TrendState 4h."""
+    return _trend_cache.get(coin.upper(), {}).get("4h")
+
+
+def get_multi_trend(coin: str) -> tuple[str, int]:
+    """
+    Tổng hợp vote 1h/4h/1d.
+    Trả về (direction, votes_count) — LONG/SHORT nếu ≥2 khung cùng chiều, NEUTRAL nếu không.
+    """
+    timeframes = ["1h", "4h", "1d"]
+    votes: dict[str, int] = {"LONG": 0, "SHORT": 0, "NEUTRAL": 0}
+    for tf in timeframes:
+        trend = _trend_cache.get(coin.upper(), {}).get(tf)
+        if trend:
+            votes[trend.direction] += 1
+    if votes["LONG"] >= 2:
+        return "LONG", votes["LONG"]
+    elif votes["SHORT"] >= 2:
+        return "SHORT", votes["SHORT"]
+    else:
+        return "NEUTRAL", 0
 
 
 # ── Indicator math (không dùng thư viện ngoài) ─────────────
@@ -56,16 +81,21 @@ def _rsi(closes: list[float], period: int = 14) -> float:
     return 100 - (100 / (1 + rs))
 
 
-def _macd(closes: list[float]) -> tuple[float, float, float]:
-    """Returns (macd_line, signal_line, histogram)."""
+def _macd(closes: list[float]) -> tuple[float, float, float, float]:
+    """Returns (macd_line, signal_line, histogram, histogram_prev)."""
     if len(closes) < 35:
-        return 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0
     ema12 = _ema(closes, 12)
     ema26 = _ema(closes, 26)
-    macd_line = [m - n for m, n in zip(ema12, ema26)]
-    signal = _ema(macd_line, 9)
-    hist = macd_line[-1] - signal[-1]
-    return macd_line[-1], signal[-1], hist
+    macd_series = [m - n for m, n in zip(ema12, ema26)]
+    sig_series = _ema(macd_series, 9)
+    hist = macd_series[-1] - sig_series[-1]
+    hist_prev = (
+        (macd_series[-2] - sig_series[-2])
+        if len(macd_series) >= 2 and len(sig_series) >= 2
+        else 0.0
+    )
+    return macd_series[-1], sig_series[-1], hist, hist_prev
 
 
 def _atr(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> float:
@@ -83,17 +113,22 @@ def _atr(highs: list[float], lows: list[float], closes: list[float], period: int
 
 
 def _compute_trend(
-    closes: list[float], highs: list[float], lows: list[float]
+    closes: list[float],
+    highs: list[float],
+    lows: list[float],
+    timeframe: str = "4h",
 ) -> TrendState:
     if len(closes) < 55:
-        return TrendState("NEUTRAL", 0, 0.0, closes[-1], closes[-1], 50.0, 0.0)
+        return TrendState(
+            "NEUTRAL", 0, 0.0, closes[-1], closes[-1], 50.0, 0.0, timeframe=timeframe
+        )
 
     ema20_series = _ema(closes, 20)
     ema50_series = _ema(closes, 50)
     ema20 = ema20_series[-1]
     ema50 = ema50_series[-1]
     rsi = _rsi(closes)
-    _, _, macd_hist = _macd(closes)
+    macd_line_val, macd_signal_val, macd_hist, macd_hist_prev = _macd(closes)
     atr = _atr(highs, lows, closes)
 
     long_score = 0
@@ -135,6 +170,10 @@ def _compute_trend(
         ema50=ema50,
         rsi=rsi,
         macd_hist=macd_hist,
+        macd_hist_prev=macd_hist_prev,
+        macd_line=macd_line_val,
+        macd_signal_line=macd_signal_val,
+        timeframe=timeframe,
     )
 
 
@@ -143,13 +182,20 @@ def _compute_trend(
 BINANCE_FUTURES_KLINES = "https://fapi.binance.com/fapi/v1/klines"
 
 
-async def _fetch_klines(session: aiohttp.ClientSession, symbol: str) -> Optional[dict]:
-    """Fetch 60 candles 4h từ Binance Futures. Trả về {closes, highs, lows} hoặc None."""
-    params = {"symbol": f"{symbol}USDT", "interval": "4h", "limit": 60}
+async def _fetch_klines(
+    session: aiohttp.ClientSession,
+    symbol: str,
+    timeframe: str = "4h",
+    limit: int = 60,
+) -> Optional[dict]:
+    """Fetch klines từ Binance Futures. Trả về {closes, highs, lows} hoặc None."""
+    params = {"symbol": f"{symbol}USDT", "interval": timeframe, "limit": limit}
     try:
-        async with session.get(BINANCE_FUTURES_KLINES, params=params, timeout=aiohttp.ClientTimeout(total=10)) as r:
+        async with session.get(
+            BINANCE_FUTURES_KLINES, params=params, timeout=aiohttp.ClientTimeout(total=10)
+        ) as r:
             if r.status != 200:
-                logger.warning(f"TrendDetector: Binance klines {symbol} status {r.status}")
+                logger.warning(f"TrendDetector: Binance klines {symbol} [{timeframe}] status {r.status}")
                 return None
             data = await r.json()
             # [open_time, open, high, low, close, volume, ...]
@@ -158,30 +204,42 @@ async def _fetch_klines(session: aiohttp.ClientSession, symbol: str) -> Optional
             lows   = [float(c[3]) for c in data]
             return {"closes": closes, "highs": highs, "lows": lows}
     except Exception as e:
-        logger.warning(f"TrendDetector: fetch {symbol} error: {e}")
+        logger.warning(f"TrendDetector: fetch {symbol} [{timeframe}] error: {e}")
         return None
 
 
-# ── Poll loop ───────────────────────────────────────────────
+# ── Multi-timeframe poll loop ───────────────────────────────
 
 async def run_trend_poll(coins: list[str], interval: int = None):
-    """Chạy song song với bot — cập nhật _trend_cache mỗi interval giây."""
-    if interval is None:
-        interval = config.trend_poll_interval
+    """Polls 1h/4h/1d klines với interval riêng biệt cho mỗi timeframe."""
+    tf_config = {
+        "1h": {"interval": config.trend_poll_interval_1h, "limit": 100},
+        "4h": {"interval": config.trend_poll_interval_4h, "limit": 60},
+        "1d": {"interval": config.trend_poll_interval_1d, "limit": 60},
+    }
+    last_poll: dict[str, float] = {tf: 0.0 for tf in tf_config}
 
-    logger.info(f"TrendDetector started — {len(coins)} coins, interval={interval}s (4h klines)")
+    logger.info(
+        f"TrendDetector (multi-TF) started — {len(coins)} coins, "
+        f"1h/{config.trend_poll_interval_1h}s  "
+        f"4h/{config.trend_poll_interval_4h}s  "
+        f"1d/{config.trend_poll_interval_1d}s"
+    )
 
     async with aiohttp.ClientSession() as session:
         while True:
-            for coin in coins:
-                klines = await _fetch_klines(session, coin)
-                if klines:
-                    state = _compute_trend(**klines)
-                    _trend_cache[coin.upper()] = state
-                    logger.debug(
-                        f"Trend {coin}: {state.direction} {state.score}/3 "
-                        f"EMA20={state.ema20:.2f} EMA50={state.ema50:.2f} "
-                        f"RSI={state.rsi:.1f} ATR={state.atr:.2f}"
-                    )
-                await asyncio.sleep(0.5)  # tránh rate limit
-            await asyncio.sleep(interval)
+            now = time.time()
+            for tf, cfg_tf in tf_config.items():
+                if now - last_poll[tf] >= cfg_tf["interval"]:
+                    for coin in coins:
+                        klines = await _fetch_klines(session, coin, tf, cfg_tf["limit"])
+                        if klines:
+                            state = _compute_trend(**klines, timeframe=tf)
+                            _trend_cache.setdefault(coin.upper(), {})[tf] = state
+                            logger.debug(
+                                f"Trend {coin} [{tf}]: {state.direction} {state.score}/3 "
+                                f"RSI={state.rsi:.1f} ATR={state.atr:.2f}"
+                            )
+                        await asyncio.sleep(0.3)
+                    last_poll[tf] = time.time()
+            await asyncio.sleep(60)

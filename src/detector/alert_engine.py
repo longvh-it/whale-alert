@@ -229,5 +229,10 @@ class AlertEngine:
                     leverage=alert.extra.get("leverage"),
                     whale_address=alert.address,
                 )
+                # Buffer event for reversal detection (Task 1)
+                try:
+                    tracker.add_whale_event(alert)
+                except Exception:
+                    pass
             except RuntimeError:
                 pass  # SignalTracker chưa khởi tạo (test mode)

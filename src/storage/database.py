@@ -5,6 +5,22 @@ import aiosqlite
 from loguru import logger
 from config.settings import config
 
+# Full column list for signals SELECT queries (includes all migrated columns)
+_SIGNAL_COLS = [
+    "id", "coin", "direction", "entry_price", "tp1", "tp2", "tp3",
+    "sl_price", "leverage", "status", "order_type", "source", "whale_address",
+    "channel_msg_id", "note", "created_at",
+    "sl_moved_to_entry", "sl_move_reason", "close_reason", "close_price",
+    "reversal_score", "quality_score",
+]
+
+_SIGNAL_SELECT = (
+    "SELECT id, coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
+    "leverage, status, order_type, source, whale_address, channel_msg_id, note, created_at, "
+    "sl_moved_to_entry, sl_move_reason, close_reason, close_price, reversal_score, quality_score "
+    "FROM signals"
+)
+
 
 DB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -124,6 +140,19 @@ class Database:
                 await db.execute("ALTER TABLE users ADD COLUMN confluence_enabled INTEGER DEFAULT 1")
             except Exception:
                 pass
+            # New columns for signal improvements
+            for col, typedef in [
+                ("sl_moved_to_entry", "INTEGER DEFAULT 0"),
+                ("sl_move_reason",    "TEXT"),
+                ("close_reason",      "TEXT"),
+                ("close_price",       "REAL"),
+                ("reversal_score",    "INTEGER"),
+                ("quality_score",     "INTEGER DEFAULT 0"),
+            ]:
+                try:
+                    await db.execute(f"ALTER TABLE signals ADD COLUMN {col} {typedef}")
+                except Exception:
+                    pass
             await db.commit()
         logger.info(f"Database initialized: {self.db_path}")
 
@@ -481,14 +510,16 @@ class Database:
         whale_address: Optional[str] = None,
         note: Optional[str] = None,
         order_type: str = "MARKET",
+        quality_score: int = 0,
     ) -> int:
         initial_status = "PENDING" if order_type == "LIMIT" else "ACTIVE"
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "INSERT INTO signals (coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
-                "leverage, status, order_type, source, whale_address, note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "leverage, status, order_type, source, whale_address, note, quality_score) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (coin, direction, entry_price, tp1, tp2, tp3, sl_price,
-                 leverage, initial_status, order_type, source, whale_address, note),
+                 leverage, initial_status, order_type, source, whale_address, note, quality_score),
             )
             await db.commit()
             return cursor.lastrowid
@@ -496,52 +527,95 @@ class Database:
     async def get_signal(self, sig_id: int) -> Optional[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT id, coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
-                "leverage, status, order_type, source, whale_address, channel_msg_id, note, created_at "
-                "FROM signals WHERE id = ?",
+                _SIGNAL_SELECT + " WHERE id = ?",
                 (sig_id,),
             )
             row = await cursor.fetchone()
             if not row:
                 return None
-            cols = ["id", "coin", "direction", "entry_price", "tp1", "tp2", "tp3",
-                    "sl_price", "leverage", "status", "order_type", "source", "whale_address",
-                    "channel_msg_id", "note", "created_at"]
-            return dict(zip(cols, row))
+            return dict(zip(_SIGNAL_COLS, row))
 
     async def get_active_signals(self) -> list[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT id, coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
-                "leverage, status, order_type, source, whale_address, channel_msg_id, note, created_at "
-                "FROM signals WHERE status IN ('PENDING','ACTIVE','TP1_HIT','TP2_HIT') AND closed_at IS NULL"
+                _SIGNAL_SELECT + " WHERE status IN ('PENDING','ACTIVE','TP1_HIT','TP2_HIT') AND closed_at IS NULL"
             )
             rows = await cursor.fetchall()
-            cols = ["id", "coin", "direction", "entry_price", "tp1", "tp2", "tp3",
-                    "sl_price", "leverage", "status", "order_type", "source", "whale_address",
-                    "channel_msg_id", "note", "created_at"]
-            return [dict(zip(cols, r)) for r in rows]
+            return [dict(zip(_SIGNAL_COLS, r)) for r in rows]
 
     async def list_signals(self, limit: int = 20) -> list[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
-                "SELECT id, coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
-                "leverage, status, order_type, source, whale_address, channel_msg_id, note, created_at "
-                "FROM signals ORDER BY id DESC LIMIT ?",
+                _SIGNAL_SELECT + " ORDER BY id DESC LIMIT ?",
                 (limit,),
             )
             rows = await cursor.fetchall()
-            cols = ["id", "coin", "direction", "entry_price", "tp1", "tp2", "tp3",
-                    "sl_price", "leverage", "status", "order_type", "source", "whale_address",
-                    "channel_msg_id", "note", "created_at"]
-            return [dict(zip(cols, r)) for r in rows]
+            return [dict(zip(_SIGNAL_COLS, r)) for r in rows]
+
+    async def get_signals_by_status(self, statuses: list[str]) -> list[dict]:
+        """Trả về signals theo danh sách status, chưa đóng (closed_at IS NULL)."""
+        placeholders = ",".join("?" for _ in statuses)
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                _SIGNAL_SELECT + f" WHERE status IN ({placeholders}) AND closed_at IS NULL",
+                statuses,
+            )
+            rows = await cursor.fetchall()
+            return [dict(zip(_SIGNAL_COLS, r)) for r in rows]
+
+    async def close_signal_early(
+        self,
+        signal_id: int,
+        close_price: Optional[float],
+        reason: str,
+        reversal_score: int,
+    ):
+        """Đóng kèo sớm với lý do cụ thể (timeout / trend_reversal)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE signals SET status='CANCELLED', closed_at=CURRENT_TIMESTAMP, "
+                "close_reason=?, close_price=?, reversal_score=? WHERE id=?",
+                (reason, close_price, reversal_score, signal_id),
+            )
+            await db.commit()
+
+    async def update_signal_sl(
+        self,
+        signal_id: int,
+        new_sl: float,
+        moved_to_entry: bool = False,
+        reason: str = None,
+    ):
+        """Cập nhật SL price, tuỳ chọn đánh dấu đã dời về entry."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE signals SET sl_price=?, sl_moved_to_entry=?, sl_move_reason=? WHERE id=?",
+                (new_sl, int(moved_to_entry), reason, signal_id),
+            )
+            await db.commit()
+
+    async def count_sl_hits_since(self, since: datetime) -> int:
+        """Đếm số kèo SL_HIT kể từ mốc thời gian."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM signals WHERE status='SL_HIT' AND closed_at >= ?",
+                (since.isoformat(),),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0
 
     async def update_signal_status(self, sig_id: int, status: str, close: bool = False):
         async with aiosqlite.connect(self.db_path) as db:
             if close:
+                _reason_map = {
+                    "SL_HIT":    "sl_hit",
+                    "TP3_HIT":   "tp3_hit",
+                    "CANCELLED": "manual",
+                }
+                close_reason = _reason_map.get(status, status.lower())
                 await db.execute(
-                    "UPDATE signals SET status=?, closed_at=CURRENT_TIMESTAMP WHERE id=?",
-                    (status, sig_id),
+                    "UPDATE signals SET status=?, closed_at=CURRENT_TIMESTAMP, close_reason=? WHERE id=?",
+                    (status, close_reason, sig_id),
                 )
             else:
                 await db.execute(

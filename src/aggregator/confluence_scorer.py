@@ -9,6 +9,17 @@ from config.settings import config
 # All possible signal sources for scoring
 ALL_SOURCES = ["hyperliquid", "binance", "bybit", "oi_spike", "funding", "liquidation"]
 
+# Weighted importance per source (total = 10)
+SOURCE_WEIGHTS = {
+    "hyperliquid":  3,
+    "oi_spike":     2,
+    "liquidation":  2,
+    "binance":      1,
+    "bybit":        1,
+    "funding":      1,
+}
+_MAX_WEIGHTED_SCORE = sum(SOURCE_WEIGHTS.values())  # 10
+
 
 class ConfluenceScorer:
     def __init__(self, alert_engine, cfg=None):
@@ -52,8 +63,13 @@ class ConfluenceScorer:
             grouped[key][sig["source"]] = prev + sig["size_usd"]
 
         for (symbol, direction), sources in grouped.items():
-            score = len(sources)
-            if score < self.cfg.confluence_min_sources:
+            raw_score = len(sources)
+            if raw_score < self.cfg.confluence_min_sources:
+                continue
+
+            # Weighted score check
+            total_score = sum(SOURCE_WEIGHTS.get(src, 1) for src in sources)
+            if total_score < self.cfg.confluence_min_score_weighted:
                 continue
 
             alert_key = f"{symbol}_{direction}"
@@ -62,13 +78,20 @@ class ConfluenceScorer:
                 continue
 
             self._last_alert[alert_key] = now
-            await self._emit(symbol, direction, score, sources)
+            await self._emit(symbol, direction, raw_score, total_score, sources)
 
     def _prune(self):
         cutoff = time.time() - self.cfg.confluence_window * 2
         self._buffer = [s for s in self._buffer if s["ts"] >= cutoff]
 
-    async def _emit(self, symbol: str, direction: str, score: int, sources: dict):
+    async def _emit(
+        self,
+        symbol: str,
+        direction: str,
+        score: int,
+        weighted_score: int,
+        sources: dict,
+    ):
         from src.detector.whale_detector import WhaleAlert, AlertType
         total_usd = sum(sources.values())
         alert = WhaleAlert(
@@ -80,9 +103,13 @@ class ConfluenceScorer:
             price=0.0,
             extra={
                 "score": score,
-                "max_score": len(ALL_SOURCES),
+                "weighted_score": weighted_score,
+                "max_score": _MAX_WEIGHTED_SCORE,
                 "sources": dict(sources),
             },
         )
         await self.alert_engine.send_global_alert(alert)
-        logger.info(f"Confluence: {symbol} {direction} score={score}/{len(ALL_SOURCES)}")
+        logger.info(
+            f"Confluence: {symbol} {direction} sources={score}/{len(ALL_SOURCES)} "
+            f"weighted={weighted_score}/{_MAX_WEIGHTED_SCORE}"
+        )
