@@ -79,9 +79,9 @@ class Config:
 
     # Auto-cut on trend reversal
     reversal_cut_enabled: bool = os.getenv("REVERSAL_CUT_ENABLED", "true").lower() == "true"
-    reversal_min_score: int = int(os.getenv("REVERSAL_MIN_SCORE", "2"))
+    reversal_min_score: int = int(os.getenv("REVERSAL_MIN_SCORE", "4"))
     reversal_grace_minutes: int = int(os.getenv("REVERSAL_GRACE_MINUTES", "60"))
-    reversal_alt_min_score: int = int(os.getenv("REVERSAL_ALT_MIN_SCORE", "3"))
+    reversal_alt_min_score: int = int(os.getenv("REVERSAL_ALT_MIN_SCORE", "5"))
     reversal_check_interval: int = int(os.getenv("REVERSAL_CHECK_INTERVAL", "15"))
 
     # Auto-cancel stale PENDING signals
