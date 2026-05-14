@@ -85,15 +85,15 @@ async def cmd_signal(msg: Message):
 
     usage = (
         "❌ Cú pháp:\n"
-        "<code>/signal BTC LONG 95000 TP1:97000 TP2:99000 SL:93500</code>\n\n"
+        "<code>/signal SOL LONG 90.25 TP1: 94.5 TP2: 97 SL: 88</code>\n\n"
         "Entry price:\n"
         "• <b>mk</b> — dùng giá thị trường hiện tại (market)\n"
-        "• <b>95000</b> — giá cụ thể → lệnh limit (chờ giá chạm)\n\n"
-        "Tham số:\n"
+        "• <b>90.25</b> — giá cụ thể → lệnh limit (chờ giá chạm)\n\n"
+        "Tham số (có hoặc không có space sau dấu :):\n"
         "• <b>TP1, TP2, TP3</b> — mức chốt lời (ít nhất 1)\n"
         "• <b>SL</b> — cắt lỗ (bắt buộc)\n"
-        "• <b>LEV</b> — đòn bẩy, vd: <code>LEV:20</code>\n"
-        "• <b>NOTE</b> — ghi chú, vd: <code>NOTE:Breakout key level</code>"
+        "• <b>LEV</b> — đòn bẩy, vd: <code>LEV: 20</code>\n"
+        "• <b>NOTE</b> — ghi chú, vd: <code>NOTE: Breakout key level</code>"
     )
 
     if len(parts) < 5:
@@ -135,13 +135,13 @@ async def cmd_signal(msg: Message):
 
     # Parse NOTE before numeric kv (it can contain spaces)
     note = None
-    note_m = re.search(r'\bNOTE:(.+?)(?:\s+[A-Z]+:\S|$)', kv_str, re.IGNORECASE)
+    note_m = re.search(r'\bNOTE:\s*(.+?)(?:\s+[A-Z]+\s*:\s*\S|$)', kv_str, re.IGNORECASE)
     if note_m:
         note = note_m.group(1).strip()
 
-    # Parse numeric key:value pairs
+    # Parse numeric key:value pairs — cho phép space sau dấu :
     kv: dict[str, float] = {}
-    for m in re.finditer(r'\b(TP1|TP2|TP3|SL|LEV):([\d.]+)', kv_str, re.IGNORECASE):
+    for m in re.finditer(r'\b(TP1|TP2|TP3|SL|LEV):\s*([\d.]+)', kv_str, re.IGNORECASE):
         kv[m.group(1).upper()] = float(m.group(2))
 
     tp1 = kv.get("TP1")
