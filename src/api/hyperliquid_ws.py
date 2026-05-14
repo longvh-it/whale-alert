@@ -77,13 +77,19 @@ class HyperliquidWS:
 
         # Subscribe L2 order book for DOM analysis
         if config.dom_enabled:
+            ok = []
             for coin in config.dom_coins:
-                await ws.send(json.dumps({
-                    "method": "subscribe",
-                    "subscription": {"type": "l2Book", "coin": coin},
-                }))
-                await asyncio.sleep(0.2)
-            logger.info(f"Subscribed to L2 order book for {len(config.dom_coins)} DOM coins")
+                try:
+                    await ws.send(json.dumps({
+                        "method": "subscribe",
+                        "subscription": {"type": "l2Book", "coin": coin},
+                    }))
+                    ok.append(coin)
+                    await asyncio.sleep(0.2)
+                except Exception as e:
+                    logger.warning(f"l2Book subscribe failed for {coin}: {e}")
+            if ok:
+                logger.info(f"Subscribed to L2 order book for {len(ok)} DOM coins: {ok}")
 
         # Re-subscribe to all watched users (important on reconnect)
         for addr in list(self._watched_users):
