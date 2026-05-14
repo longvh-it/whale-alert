@@ -111,6 +111,13 @@ class Config:
     ecosystem_signal_quality_penalty: int = int(os.getenv("ECOSYSTEM_SIGNAL_QUALITY_PENALTY", "15"))
     ecosystem_map: dict = None  # populated below
 
+    # Trend Scanner (proactive daily scan — volume spike + multi-TF trend)
+    scan_enabled: bool = os.getenv("SCAN_ENABLED", "false").lower() == "true"
+    scan_daily_max: int = int(os.getenv("SCAN_DAILY_MAX", "2"))
+    scan_volume_min: float = float(os.getenv("SCAN_VOLUME_MIN", "2.0"))
+    scan_min_trend_score: int = int(os.getenv("SCAN_MIN_TREND_SCORE", "2"))
+    scan_coin_cooldown_hours: int = int(os.getenv("SCAN_COIN_COOLDOWN_HOURS", "24"))
+
     def __post_init__(self):
         if self.binance_symbols is None:
             raw = os.getenv("BINANCE_SYMBOLS", "BTC,ETH,SOL,BNB,DOGE,AVAX")
@@ -122,7 +129,7 @@ class Config:
             raw = os.getenv("AUTO_SIGNAL_MAJOR_COINS", "BTC,ETH")
             self.auto_signal_major_coins = [s.strip().upper() for s in raw.split(",") if s.strip()]
         if self.dom_coins is None:
-            raw = os.getenv("DOM_COINS", "BTC,ETH,SOL,BNB,ARB,OP")
+            raw = os.getenv("DOM_COINS", "BTC,ETH,SOL,ARB,DOGE,AVAX")
             self.dom_coins = [s.strip().upper() for s in raw.split(",") if s.strip()]
         if self.ecosystem_map is None:
             self.ecosystem_map = {

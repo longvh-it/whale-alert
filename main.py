@@ -19,6 +19,7 @@ from src.detector.oi_detector import OISpikeDetector
 from src.detector.funding_detector import FundingRateDetector
 from src.detector.dom_analyzer import dom_analyzer
 from src.detector.ecosystem_detector import ecosystem_detector
+from src.detector.trend_scanner import trend_scanner
 from src.aggregator.confluence_scorer import ConfluenceScorer
 from src.bot.handlers import router
 from src.bot.signal_handlers import router as signal_router
@@ -77,7 +78,10 @@ async def main():
     ecosystem_detector.set_signal_tracker(signal_tracker)
     ecosystem_detector.set_dom_analyzer(dom_analyzer)
     ecosystem_detector.set_bot(bot)
-    logger.info("DOM Analyzer and Ecosystem Detector initialized")
+    trend_scanner.set_signal_tracker(signal_tracker)
+    trend_scanner.set_dom_analyzer(dom_analyzer)
+    trend_scanner.set_bot(bot)
+    logger.info("DOM Analyzer, Ecosystem Detector, and Trend Scanner initialized")
 
     # Set command menu (bottom-left "/" button in Telegram)
     await bot.set_my_commands([

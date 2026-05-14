@@ -221,15 +221,16 @@ async def _fetch_klines(
 
 # ── Multi-timeframe poll loop ───────────────────────────────
 
-async def _check_volume_spike(coin: str, klines_raw: list, direction_from_close: bool = True):
+async def _check_volume_spike(coin: str, klines_raw: list):
     """
     So sánh volume nến hiện tại với MA20 volume.
-    Gọi ecosystem_detector.on_volume_spike() nếu đủ ngưỡng.
+    Gọi ecosystem_detector và trend_scanner nếu đủ ngưỡng tương ứng.
     """
     if len(klines_raw) < 21:
         return
     try:
         from src.detector.ecosystem_detector import ecosystem_detector
+        from src.detector.trend_scanner import trend_scanner
         from config.settings import config as _cfg
         volumes = [float(k[5]) for k in klines_raw]
         current_vol = volumes[-1]
@@ -237,12 +238,16 @@ async def _check_volume_spike(coin: str, klines_raw: list, direction_from_close:
         if ma20_vol == 0:
             return
         ratio = current_vol / ma20_vol
+        open_price = float(klines_raw[-1][1])
+        close_price = float(klines_raw[-1][4])
+        direction = "LONG" if close_price >= open_price else "SHORT"
+
         if ratio >= _cfg.ecosystem_volume_spike_min:
-            open_price = float(klines_raw[-1][1])
-            close_price = float(klines_raw[-1][4])
-            direction = "LONG" if close_price >= open_price else "SHORT"
             logger.info(f"Volume spike {coin}: {ratio:.1f}x MA20, direction={direction}")
             await ecosystem_detector.on_volume_spike(coin, ratio, direction)
+
+        # Trend scanner nhận toàn bộ spike (dùng ngưỡng riêng bên trong)
+        await trend_scanner.on_volume_spike(coin, ratio, direction)
     except Exception as e:
         logger.debug(f"_check_volume_spike error: {e}")
 

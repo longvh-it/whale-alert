@@ -374,6 +374,7 @@ class SignalTracker:
                 text="\n".join(text_lines),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
+                reply_to_message_id=keo.get("channel_msg_id"),
             )
         except Exception as e:
             logger.warning(f"_send_tp1_strong error: {e}")
@@ -401,6 +402,7 @@ class SignalTracker:
             await self.bot.send_message(
                 chat_id=self._channel_id, text=text,
                 parse_mode="HTML", disable_web_page_preview=True,
+                reply_to_message_id=keo.get("channel_msg_id"),
             )
         except Exception as e:
             logger.warning(f"_send_tp1_warning error: {e}")
@@ -439,6 +441,7 @@ class SignalTracker:
                 text="\n".join(text_lines),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
+                reply_to_message_id=keo.get("channel_msg_id"),
             )
         except Exception as e:
             logger.warning(f"_send_tp1_sl_moved error: {e}")
@@ -608,6 +611,7 @@ class SignalTracker:
             await self.bot.send_message(
                 chat_id=self._channel_id, text=text,
                 parse_mode="HTML", disable_web_page_preview=True,
+                reply_to_message_id=keo.get("channel_msg_id"),
             )
         except Exception as e:
             logger.warning(f"_send_reversal_cut_notification error: {e}")
@@ -661,6 +665,7 @@ class SignalTracker:
             await self.bot.send_message(
                 chat_id=self._channel_id, text=text,
                 parse_mode="HTML", disable_web_page_preview=True,
+                reply_to_message_id=keo.get("channel_msg_id"),
             )
         except Exception as e:
             logger.warning(f"_send_timeout_notification error: {e}")
@@ -812,6 +817,7 @@ class SignalTracker:
                 text=f"{header}\n{body}",
                 parse_mode="HTML",
                 disable_web_page_preview=True,
+                reply_to_message_id=keo.get("channel_msg_id"),
             )
         except Exception as e:
             logger.warning(f"Lỗi gửi hit notification signal #{sig_id}: {e}")
@@ -1103,3 +1109,84 @@ class SignalTracker:
             f"Ecosystem signal #{sig_id}: {direction} {coin} "
             f"trigger={eco.trigger_coin} quality={quality}"
         )
+
+    # ── Trend Scanner signal ───────────────────────────────
+    async def maybe_create_scan_signal(
+        self,
+        coin: str,
+        direction: str,
+        volume_ratio: float,
+        trend_confirmed: int,
+        trend,
+        dom_snapshot=None,
+    ) -> bool:
+        """
+        Tạo kèo từ TrendScanner (volume spike + multi-TF trend, không cần whale trigger).
+        Trả về True nếu tạo thành công, False nếu bị reject.
+        """
+        if not config.auto_signal_enabled:
+            return False
+
+        if config.daily_loss_limit_enabled and await self._check_daily_loss_limit():
+            logger.info(f"TrendScanner signal skipped: daily SL limit reached, {coin}")
+            return False
+
+        if await db.has_active_signal(coin):
+            logger.debug(f"TrendScanner signal skipped: đã có kèo active cho {coin}")
+            return False
+
+        entry = self._prices.get(coin.upper())
+        if not entry:
+            logger.debug(f"TrendScanner signal skipped: chưa có giá cho {coin}")
+            return False
+
+        quality = self._calc_signal_quality(
+            whale_size_usd=0,
+            trend_confirmed=trend_confirmed,
+            confluence_score=0,
+            volume_ratio=volume_ratio,
+            dom_snapshot=dom_snapshot,
+            signal_direction=direction,
+        )
+        if quality < config.signal_min_quality_score:
+            logger.info(
+                f"TrendScanner signal skipped: {coin} quality={quality} < {config.signal_min_quality_score}"
+            )
+            return False
+
+        atr = trend.atr if trend.atr > 0 else entry * (config.auto_signal_sl_pct / 100)
+        sl_dist = atr * config.trend_atr_sl_mult
+        tp_dist = atr * config.trend_atr_tp_mult
+
+        if direction == "LONG":
+            sl  = entry - sl_dist
+            tp1 = entry + tp_dist / 3
+            tp2 = entry + tp_dist * 2 / 3
+            tp3 = entry + tp_dist
+        else:
+            sl  = entry + sl_dist
+            tp1 = entry - tp_dist / 3
+            tp2 = entry - tp_dist * 2 / 3
+            tp3 = entry - tp_dist
+
+        note = f"Vol {volume_ratio:.1f}x MA20 | Multi-TF {trend_confirmed}/3 | RSI {trend.rsi:.0f} | ATR {atr:.2f}"
+
+        sig_id = await self.create_and_post(
+            coin=coin,
+            direction=direction,
+            entry=round(entry, 4),
+            tp1=round(tp1, 4),
+            tp2=round(tp2, 4),
+            tp3=round(tp3, 4),
+            sl=round(sl, 4),
+            leverage=None,
+            source="SCAN",
+            note=note,
+            quality_score=quality,
+            source_detail=f"vol_{volume_ratio:.1f}x_trend_{trend_confirmed}of3",
+        )
+        logger.info(
+            f"TrendScanner signal #{sig_id}: {direction} {coin} entry={entry} "
+            f"SL={sl:.2f} TP3={tp3:.2f} vol={volume_ratio:.1f}x trend={trend_confirmed}/3 quality={quality}"
+        )
+        return True
