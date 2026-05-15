@@ -30,7 +30,8 @@ Khi ≥3 nguồn xác nhận cùng chiều → **Confluence Alert** được kí
 - Phát hiện whale trade + xác nhận xu hướng đa khung giờ (1h/4h/1d)
 - Tính TP/SL tự động từ ATR
 - Theo dõi TP1 → TP2 → TP3 và SL real-time, cập nhật message Telegram in-place
-- Tự động move SL về entry sau khi chạm TP1
+- TP1 là milestone: tiếp tục tracking TP2/TP3 với SL giữ nguyên
+- Đóng tại entry (hoà vốn) nếu trend đảo mạnh (≥4 điểm) sau TP1
 - Tự đóng kèo nếu trend đảo chiều (reversal cut)
 - Giới hạn số SL thua/ngày để bảo vệ vốn
 
@@ -106,8 +107,7 @@ TREND_MIN_SCORE=2                  # Tối thiểu 2/3 khung giờ xác nhận
 TREND_ATR_SL_MULT=1.5
 TREND_ATR_TP_MULT=3.0
 
-TP1_REVERSAL_MOVE_SL_ENABLED=true  # Move SL về entry sau TP1
-REVERSAL_CUT_ENABLED=true          # Tự đóng khi trend đảo
+REVERSAL_CUT_ENABLED=true          # Tự đóng khi trend đảo (TP1: threshold=4, ACTIVE: REVERSAL_MIN_SCORE)
 REVERSAL_GRACE_MINUTES=60
 SIGNAL_PENDING_TIMEOUT_HOURS=4
 DAILY_SL_LIMIT=3                   # Max SL/ngày
