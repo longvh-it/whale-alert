@@ -308,6 +308,17 @@ async def cmd_signal_stats(msg: Message):
     avg_dur_win = sum(durations_win) // len(durations_win) if durations_win else 0
     avg_dur_loss = sum(durations_loss) // len(durations_loss) if durations_loss else 0
 
+    # Source breakdown
+    source_rows = await db.get_signal_stats_by_source()
+    source_lines = []
+    for row in source_rows:
+        bar_filled = int(row["win_rate"] / 10)
+        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+        source_lines.append(
+            f"  <b>{row['source']}</b>: {row['wins']}W/{row['losses']}L "
+            f"<b>{row['win_rate']:.0f}%</b> [{bar}]"
+        )
+
     lines = [
         "📊 <b>Tổng hợp kèo</b>  <i>(Admin)</i>", "",
         f"📌 Tổng: <b>{total}</b>  |  🟡 Active: <b>{stats['active']}</b>  |  ⚪ Đã hủy: {stats['cancelled']}",
@@ -319,6 +330,33 @@ async def cmd_signal_stats(msg: Message):
         f"📉 Avg thua:  <b>{avg_loss:.2f}%</b>  ({_dur(avg_dur_loss)})",
         f"💡 Expectancy: <b>{'+' if expectancy >= 0 else ''}{expectancy:.2f}%</b>",
     ]
+    if source_lines:
+        lines += ["", "📡 <b>Win rate theo nguồn:</b>"] + source_lines
+    await msg.answer("\n".join(lines), parse_mode="HTML")
+
+
+# ── /source_stats ──────────────────────────────────────────
+@router.message(Command("source_stats"))
+async def cmd_source_stats(msg: Message):
+    if not _is_admin(msg.chat.id):
+        await msg.answer("❌ Chỉ admin mới xem được.")
+        return
+
+    rows = await db.get_signal_stats_by_source()
+    if not rows:
+        await msg.answer("📊 Chưa có kèo nào đã đóng.")
+        return
+
+    lines = ["📡 <b>Win rate theo nguồn kèo</b>  <i>(Admin)</i>", ""]
+    for row in rows:
+        closed = row["wins"] + row["losses"]
+        bar_filled = int(row["win_rate"] / 10)
+        bar = "█" * bar_filled + "░" * (10 - bar_filled)
+        lines.append(
+            f"<b>{row['source']}</b>  [{bar}]  <b>{row['win_rate']:.1f}%</b>\n"
+            f"    ✅ {row['wins']} thắng  ❌ {row['losses']} thua  ({closed} kèo đóng)"
+        )
+
     await msg.answer("\n".join(lines), parse_mode="HTML")
 
 

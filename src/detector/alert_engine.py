@@ -59,6 +59,11 @@ class AlertEngine:
         for alert in alerts:
             await self._route_alert(alert)
 
+    async def process_okx_trade(self, payload: dict):
+        alerts = self.detector.on_okx_trade(payload)
+        for alert in alerts:
+            await self._route_alert(alert)
+
     async def process_binance_liquidation(self, payload: dict):
         alerts = self.detector.on_binance_liquidation(payload)
         for alert in alerts:

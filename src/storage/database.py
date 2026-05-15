@@ -671,6 +671,37 @@ class Database:
                 "cancelled": counts.get("CANCELLED", 0),
             }
 
+    async def get_signal_stats_by_source(self) -> list[dict]:
+        """Win/loss breakdown theo từng nguồn kèo (WHALE, SCAN, ECOSYSTEM, TV, ADMIN, OKX…)."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                """
+                SELECT
+                    source,
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN status IN ('TP1_HIT','TP2_HIT','TP3_HIT') THEN 1 ELSE 0 END) AS wins,
+                    SUM(CASE WHEN status = 'SL_HIT' THEN 1 ELSE 0 END) AS losses
+                FROM signals
+                WHERE status IN ('TP1_HIT','TP2_HIT','TP3_HIT','SL_HIT')
+                GROUP BY source
+                ORDER BY total DESC
+                """
+            )
+            rows = await cursor.fetchall()
+            result = []
+            for r in rows:
+                source, total, wins, losses = r[0], r[1], r[2], r[3]
+                closed = wins + losses
+                win_rate = wins / closed * 100 if closed > 0 else 0.0
+                result.append({
+                    "source": source or "UNKNOWN",
+                    "total": total,
+                    "wins": wins,
+                    "losses": losses,
+                    "win_rate": win_rate,
+                })
+            return result
+
     async def get_closed_signals(self, limit: int = 20) -> list[dict]:
         """Signals đã đóng (SL_HIT hoặc TPx_HIT), sắp xếp mới nhất trước."""
         async with aiosqlite.connect(self.db_path) as db:

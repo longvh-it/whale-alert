@@ -410,6 +410,27 @@ class WhaleDetector:
             logger.debug(f"on_bybit_trade error: {e}")
             return []
 
+    def on_okx_trade(self, payload: dict) -> list["WhaleAlert"]:
+        try:
+            symbol   = payload.get("symbol", "?")
+            side     = payload.get("side", "BUY")
+            size_usd = float(payload.get("size_usd", 0.0))
+            price    = float(payload.get("price", 0.0))
+            if size_usd < self.min_trade_usd:
+                return []
+            return [WhaleAlert(
+                alert_type=AlertType.BIG_TRADE,
+                address=f"okx_{symbol.lower()}",
+                coin=symbol,
+                size_usd=size_usd,
+                direction="LONG" if side == "BUY" else "SHORT",
+                price=price,
+                extra={"source": "OKX"},
+            )]
+        except Exception as e:
+            logger.debug(f"on_okx_trade error: {e}")
+            return []
+
     def on_binance_liquidation(self, payload: dict) -> list["WhaleAlert"]:
         try:
             symbol   = payload.get("symbol", "?")

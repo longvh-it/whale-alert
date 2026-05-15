@@ -126,6 +126,15 @@ class Config:
     trend_scan_coin_cooldown_hours: int = int(os.getenv("TREND_SCAN_COIN_COOLDOWN_HOURS", "4"))
     trend_scan_coins: list = None  # populated below
 
+    # OKX Futures WS
+    okx_enabled: bool = os.getenv("OKX_ENABLED", "false").lower() == "true"
+    okx_symbols: list = None  # populated below
+
+    # TradingView Webhook
+    tv_webhook_enabled: bool = os.getenv("TV_WEBHOOK_ENABLED", "false").lower() == "true"
+    tv_webhook_port: int = int(os.getenv("TV_WEBHOOK_PORT", "8080"))
+    tv_webhook_secret: str = os.getenv("TV_WEBHOOK_SECRET", "")
+
     def __post_init__(self):
         if self.binance_symbols is None:
             raw = os.getenv("BINANCE_SYMBOLS", "BTC,ETH,SOL,BNB,DOGE,AVAX")
@@ -142,6 +151,9 @@ class Config:
         if self.trend_scan_coins is None:
             raw = os.getenv("TREND_SCAN_COINS", "BTC,ETH,SOL,BNB,XRP,DOGE,AVAX,ADA")
             self.trend_scan_coins = [s.strip().upper() for s in raw.split(",") if s.strip()]
+        if self.okx_symbols is None:
+            raw = os.getenv("OKX_SYMBOLS", "BTC,ETH,SOL,BNB,DOGE,XRP,AVAX")
+            self.okx_symbols = [s.strip() for s in raw.split(",") if s.strip()]
         if self.ecosystem_map is None:
             self.ecosystem_map = {
                 "SOL":    ["JUP", "RAY", "BONK", "JTO", "PYTH", "WIF", "DRIFT"],

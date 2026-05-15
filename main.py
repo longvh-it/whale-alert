@@ -11,6 +11,8 @@ from src.storage.database import db
 from src.api.hyperliquid_ws import HyperliquidWS, ws as hl_ws
 from src.api.binance_ws import BinanceWS
 from src.api.bybit_ws import BybitWS
+from src.api.okx_ws import OkxWS
+from src.bot.tv_webhook import run_webhook_server
 from src.api.coinglass_rest import CoinglassRest
 from src.detector.whale_detector import WhaleDetector
 from src.detector.trend_detector import run_trend_poll
@@ -98,6 +100,7 @@ async def main():
         BotCommand(command="help",          description="Hướng dẫn sử dụng"),
         BotCommand(command="signals",       description="Danh sách kèo gần nhất"),
         BotCommand(command="signal_stats",  description="[Admin] Thống kê win rate kèo"),
+        BotCommand(command="source_stats",  description="[Admin] Win rate theo từng nguồn kèo"),
         BotCommand(command="signal_report", description="[Admin] Chi tiết kèo thắng/thua"),
         BotCommand(command="whales",        description="[Admin] Danh sách known whales"),
         BotCommand(command="whale_scores",  description="[Admin] Bảng xếp hạng whale theo win rate"),
@@ -157,6 +160,19 @@ async def main():
         binance_ws.on("binance_liquidation", on_binance_liq)
         logger.info("Binance Futures WS: enabled")
 
+    # Init OKX WS
+    okx_ws = None
+    if config.okx_enabled:
+        okx_ws = OkxWS(config)
+
+        async def on_okx_trade(payload):
+            await engine.process_okx_trade(payload)
+            direction = "LONG" if payload.get("side") == "BUY" else "SHORT"
+            confluence.ingest(payload.get("symbol", "?"), direction, "okx", payload.get("size_usd", 0))
+
+        okx_ws.on("okx_trade", on_okx_trade)
+        logger.info("OKX Futures WS: enabled")
+
     # Init Bybit WS
     bybit_ws = None
     if config.bybit_enabled:
@@ -200,6 +216,10 @@ async def main():
         tasks.append(binance_ws.start())
     if bybit_ws:
         tasks.append(bybit_ws.start())
+    if okx_ws:
+        tasks.append(okx_ws.start())
+    if config.tv_webhook_enabled:
+        tasks.append(run_webhook_server())
 
     # Run everything concurrently
     logger.success("All systems initialized. Starting tasks…")
