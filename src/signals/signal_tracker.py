@@ -85,6 +85,12 @@ class SignalTracker:
         # Task 7 — daily loss limit notification tracking
         self._daily_loss_notified_date: str = ""
 
+        # Periodic Trend Scanner
+        self._scan_counter: int = 0
+        self._scan_daily_count: int = 0
+        self._scan_daily_date: str = ""
+        self._scan_last_signal: dict[str, float] = {}  # coin → monotonic timestamp
+
     # ── REST price poll loop ───────────────────────────────
     async def start_price_poll(self, interval: int = 5):
         """Chạy song song với bot — poll giá qua REST mỗi N giây."""
@@ -103,6 +109,12 @@ class SignalTracker:
                         self._cache_ts = time.monotonic()
                     if self._cache:
                         await self._check_signals()
+                    # Periodic trend scan
+                    self._scan_counter += 1
+                    scan_every = max(1, config.trend_scan_interval // interval)
+                    if self._scan_counter >= scan_every:
+                        self._scan_counter = 0
+                        await self._run_trend_scan()
             except Exception as e:
                 logger.warning(f"SignalTracker price poll error: {e}")
             await asyncio.sleep(interval)
@@ -728,6 +740,112 @@ class SignalTracker:
         lines.append(f"📊 {STATUS_LABEL.get(status, status)}")
 
         return "\n".join(lines)
+
+    # ── Periodic Trend Scanner ─────────────────────────────
+    async def _run_trend_scan(self):
+        """Quét định kỳ (mỗi TREND_SCAN_INTERVAL giây) — tạo kèo khi 3/3 TF align, không cần whale."""
+        if not config.trend_scan_enabled or not config.auto_signal_enabled:
+            return
+
+        # Reset daily count khi sang ngày mới
+        today = datetime.utcnow().strftime("%Y-%m-%d")
+        if self._scan_daily_date != today:
+            self._scan_daily_date = today
+            self._scan_daily_count = 0
+
+        if self._scan_daily_count >= config.trend_scan_daily_max:
+            return
+
+        if config.daily_loss_limit_enabled and await self._check_daily_loss_limit():
+            return
+
+        from src.detector.trend_detector import get_multi_trend, get_trend
+
+        now = time.monotonic()
+        cooldown_secs = config.trend_scan_coin_cooldown_hours * 3600
+
+        for coin in config.trend_scan_coins:
+            if self._scan_daily_count >= config.trend_scan_daily_max:
+                break
+
+            # Per-coin cooldown
+            if now - self._scan_last_signal.get(coin, 0) < cooldown_secs:
+                continue
+
+            if await db.has_active_signal(coin):
+                continue
+
+            # Hard gate: cần 3/3 TF
+            multi_direction, confirmed = get_multi_trend(coin)
+            if confirmed < 3:
+                continue
+
+            price = self._prices.get(coin)
+            if not price:
+                continue
+
+            trend = get_trend(coin)
+            if trend is None or trend.atr <= 0:
+                continue
+
+            # DOM check — block nếu DOM ngược chiều mạnh
+            dom_snapshot = None
+            if config.dom_enabled and coin in config.dom_coins:
+                from src.detector.dom_analyzer import dom_analyzer
+                dom_snapshot = dom_analyzer.get_snapshot(coin)
+                if dom_snapshot:
+                    opposite_dom = "BEARISH" if multi_direction == "LONG" else "BULLISH"
+                    if dom_snapshot.signal == opposite_dom and dom_snapshot.signal_strength >= 2:
+                        logger.debug(f"TrendScan skip {coin}: DOM {dom_snapshot.signal} opposes {multi_direction}")
+                        continue
+
+            quality = self._calc_signal_quality(
+                whale_size_usd=0,
+                trend_confirmed=confirmed,
+                confluence_score=0,
+                dom_snapshot=dom_snapshot,
+                signal_direction=multi_direction,
+            )
+            if quality < config.trend_scan_min_quality:
+                logger.debug(f"TrendScan skip {coin}: quality={quality} < {config.trend_scan_min_quality}")
+                continue
+
+            entry = price
+            atr = trend.atr
+            sl_dist = atr * config.trend_atr_sl_mult
+            tp_dist = atr * config.trend_atr_tp_mult
+
+            if multi_direction == "LONG":
+                sl  = entry - sl_dist
+                tp1 = entry + tp_dist / 3
+                tp2 = entry + tp_dist * 2 / 3
+                tp3 = entry + tp_dist
+            else:
+                sl  = entry + sl_dist
+                tp1 = entry - tp_dist / 3
+                tp2 = entry - tp_dist * 2 / 3
+                tp3 = entry - tp_dist
+
+            note = f"TrendScan 3/3 TF | RSI {trend.rsi:.0f} | ATR {atr:.2f}"
+
+            sig_id = await self.create_and_post(
+                coin=coin,
+                direction=multi_direction,
+                entry=round(entry, 4),
+                tp1=round(tp1, 4),
+                tp2=round(tp2, 4),
+                tp3=round(tp3, 4),
+                sl=round(sl, 4),
+                source="SCAN",
+                note=note,
+                quality_score=quality,
+            )
+            self._scan_last_signal[coin] = now
+            self._scan_daily_count += 1
+            logger.info(
+                f"TrendScan signal #{sig_id}: {multi_direction} {coin} "
+                f"entry={entry} quality={quality} trend=3/3"
+            )
 
     # ── Auto-signal từ whale ───────────────────────────────
     async def maybe_create_auto_signal(

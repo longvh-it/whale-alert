@@ -118,6 +118,14 @@ class Config:
     scan_min_trend_score: int = int(os.getenv("SCAN_MIN_TREND_SCORE", "2"))
     scan_coin_cooldown_hours: int = int(os.getenv("SCAN_COIN_COOLDOWN_HOURS", "24"))
 
+    # Periodic Trend Scanner (time-based, không cần whale trigger)
+    trend_scan_enabled: bool = os.getenv("TREND_SCAN_ENABLED", "false").lower() == "true"
+    trend_scan_interval: int = int(os.getenv("TREND_SCAN_INTERVAL", "1800"))          # giây, mặc định 30 phút
+    trend_scan_daily_max: int = int(os.getenv("TREND_SCAN_DAILY_MAX", "2"))
+    trend_scan_min_quality: int = int(os.getenv("TREND_SCAN_MIN_QUALITY", "35"))      # thấp hơn whale (50) vì đã cần 3/3 TF
+    trend_scan_coin_cooldown_hours: int = int(os.getenv("TREND_SCAN_COIN_COOLDOWN_HOURS", "4"))
+    trend_scan_coins: list = None  # populated below
+
     def __post_init__(self):
         if self.binance_symbols is None:
             raw = os.getenv("BINANCE_SYMBOLS", "BTC,ETH,SOL,BNB,DOGE,AVAX")
@@ -131,6 +139,9 @@ class Config:
         if self.dom_coins is None:
             raw = os.getenv("DOM_COINS", "BTC,ETH,SOL,ARB,DOGE,AVAX")
             self.dom_coins = [s.strip().upper() for s in raw.split(",") if s.strip()]
+        if self.trend_scan_coins is None:
+            raw = os.getenv("TREND_SCAN_COINS", "BTC,ETH,SOL,BNB,XRP,DOGE,AVAX,ADA")
+            self.trend_scan_coins = [s.strip().upper() for s in raw.split(",") if s.strip()]
         if self.ecosystem_map is None:
             self.ecosystem_map = {
                 "SOL":    ["JUP", "RAY", "BONK", "JTO", "PYTH", "WIF", "DRIFT"],
