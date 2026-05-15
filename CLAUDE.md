@@ -27,7 +27,7 @@ Key variable groups:
 - **Signal (kèo)**: `AUTO_SIGNAL_ENABLED`, `AUTO_SIGNAL_MIN_USD` (BTC/ETH), `AUTO_SIGNAL_MIN_USD_ALT` (altcoins), `AUTO_SIGNAL_MAJOR_COINS`
 - **Trend detector**: `TREND_POLL_INTERVAL_1H/4H/1D` (multi-timeframe), `TREND_MIN_SCORE` (default 2/3), `TREND_ATR_SL_MULT`, `TREND_ATR_TP_MULT`
 - **Multi-source**: `BINANCE_ENABLED`, `BYBIT_ENABLED`, `COINGLASS_API_KEY`, `OI_SPIKE_THRESHOLD`, `FUNDING_EXTREME_HIGH/LOW`, `CONFLUENCE_ENABLED`, `CONFLUENCE_MIN_SCORE_WEIGHTED`
-- **Signal lifecycle**: `TP1_REVERSAL_MOVE_SL_ENABLED`, `REVERSAL_CUT_ENABLED`, `REVERSAL_MIN_SCORE`, `REVERSAL_GRACE_MINUTES`, `SIGNAL_PENDING_TIMEOUT_HOURS`, `DAILY_SL_LIMIT`, `DAILY_LOSS_LIMIT_ENABLED`, `SIGNAL_MIN_QUALITY_SCORE`
+- **Signal lifecycle**: `REVERSAL_CUT_ENABLED`, `REVERSAL_MIN_SCORE`, `REVERSAL_GRACE_MINUTES`, `SIGNAL_PENDING_TIMEOUT_HOURS`, `DAILY_SL_LIMIT`, `DAILY_LOSS_LIMIT_ENABLED`, `SIGNAL_MIN_QUALITY_SCORE`
 - **DOM analysis**: `DOM_ENABLED`, `DOM_COINS`, `DOM_WALL_MIN_USD`, `DOM_WALL_DISTANCE_MAX_PCT`, `DOM_BID_ASK_BULLISH/BEARISH`, `DOM_ABSORPTION_PCT_THRESHOLD`, `DOM_BOOK_DEPTH_LEVELS`
 - **Ecosystem**: `ECOSYSTEM_ENABLED`, `ECOSYSTEM_VOLUME_SPIKE_MIN`, `ECOSYSTEM_CALL_MIN_TREND_SCORE`, `ECOSYSTEM_SIGNAL_QUALITY_PENALTY`
 - **Channel**: `SIGNAL_CHANNEL_ID` — Telegram channel where kèo are posted
@@ -85,8 +85,9 @@ Volume spike (any source) → EcosystemDetector → scan related coins
 - `_post_to_channel()` / `_edit_signal_message()` / `_send_hit_notification()` — Telegram messaging
 - Kèo status flow: `PENDING` → `ACTIVE` → `TP1_HIT` → `TP2_HIT` → `TP3_HIT` / `SL_HIT` / `CANCELLED`
 - **Dedup rule**: a coin is "blocked" only while status is `PENDING` or `ACTIVE`; once `TP1_HIT` or higher, a new kèo can be created
-- **TP1 reversal**: after `TP1_HIT`, if trend reverses (`score ≥ TP1_REVERSAL_MIN_SCORE`), SL moves to entry automatically
-- **Reversal auto-cut**: for `ACTIVE` signals, if opposite trend score ≥ `REVERSAL_MIN_SCORE` for `REVERSAL_GRACE_MINUTES`, signal is closed with `CANCELLED`
+- **TP1 milestone**: `TP1_HIT` is not terminal — signal continues tracking TP2/TP3 with SL unchanged; sends a compact hit notification
+- **TP1 reversal cut**: after `TP1_HIT`, if reversal score ≥ 4, signal closes at entry price (breakeven) → `CANCELLED`
+- **Reversal auto-cut**: for `ACTIVE`/`TP2_HIT` signals, if opposite trend score ≥ `REVERSAL_MIN_SCORE` for `REVERSAL_GRACE_MINUTES`, signal is closed with `CANCELLED`
 - **PENDING timeout**: signals stuck in `PENDING` for > `SIGNAL_PENDING_TIMEOUT_HOURS` are auto-cancelled
 - **Daily loss limit**: once `DAILY_SL_LIMIT` SL hits occur on the current day, no new auto signals are created
 - `_recent_whale_events` — rolling list of recent whale events consumed by `EcosystemDetector._check_recent_whale()`

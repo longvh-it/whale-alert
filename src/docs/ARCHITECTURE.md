@@ -346,8 +346,9 @@ TP2 = entry ± (TP3 - entry) × 2/3
 
 | Rule | Điều kiện | Hành động |
 |------|-----------|-----------|
-| **TP1 Move SL** | TP1_HIT + `TP1_REVERSAL_MOVE_SL_ENABLED` | Move SL lên entry price |
-| **Reversal Cut** | ACTIVE + opposite trend score ≥ `REVERSAL_MIN_SCORE` trong `REVERSAL_GRACE_MINUTES` | Auto close → CANCELLED |
+| **TP1 Continue** | TP1_HIT | Tính milestone, tiếp tục tracking TP2/TP3 với SL giữ nguyên |
+| **TP1 Reversal Cut** | TP1_HIT + reversal score ≥ 4 | Đóng tại entry (hoà vốn) → CANCELLED |
+| **Reversal Cut** | ACTIVE/TP2_HIT + opposite trend score ≥ `REVERSAL_MIN_SCORE` trong `REVERSAL_GRACE_MINUTES` | Auto close → CANCELLED |
 | **Stale Cancel** | PENDING > `SIGNAL_PENDING_TIMEOUT_HOURS` giờ | Auto → CANCELLED |
 | **Daily SL Limit** | Số SL_HIT hôm nay ≥ `DAILY_SL_LIMIT` | Block tạo kèo mới |
 
@@ -618,7 +619,6 @@ CONFLUENCE_MIN_SCORE_WEIGHTED=5
 ### Nhóm Signal Lifecycle
 
 ```env
-TP1_REVERSAL_MOVE_SL_ENABLED=true # Sau TP1: move SL lên entry
 REVERSAL_CUT_ENABLED=true         # Tự đóng khi trend đảo
 REVERSAL_MIN_SCORE=4              # Điểm trend ngược tối thiểu để cut
 REVERSAL_GRACE_MINUTES=60         # Thời gian grace trước khi cut

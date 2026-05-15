@@ -167,7 +167,7 @@ class SignalTracker:
 
     async def cancel_signal(self, sig_id: int) -> bool:
         keo = await db.get_signal(sig_id)
-        if not keo or keo["status"] in ("SL_HIT", "TP1_HIT", "TP2_HIT", "TP3_HIT", "CANCELLED"):
+        if not keo or keo["status"] in ("SL_HIT", "TP2_HIT", "TP3_HIT", "CANCELLED"):
             return False
         await db.update_signal_status(sig_id, "CANCELLED", close=True)
         keo["status"] = "CANCELLED"
@@ -269,12 +269,14 @@ class SignalTracker:
     def _is_terminal(keo: dict, new_status: str) -> bool:
         if new_status == "ACTIVE":
             return False  # Limit order just activated
-        if new_status in ("SL_HIT", "TP1_HIT", "TP2_HIT", "TP3_HIT", "CANCELLED"):
+        if new_status == "TP1_HIT":
+            return False  # Continue tracking — SL moves to entry
+        if new_status in ("SL_HIT", "TP2_HIT", "TP3_HIT", "CANCELLED"):
             return True
         return False
 
     async def _on_tp1_hit_async(self, keo: dict, current_price: float):
-        """Called when TP1 is hit — signal closes as WIN."""
+        """TP1 hit — tính WIN, tiếp tục tracking TP2/TP3 với SL giữ nguyên."""
         await self._send_hit_notification(keo, "TP1_HIT", current_price)
 
     # ── Task 2: Trend reversal cut ─────────────────────────
@@ -364,26 +366,33 @@ class SignalTracker:
 
             score, reasons = self._count_reversal_signals(keo, trend, self._recent_whale_events)
 
-            # Determine minimum score: altcoins need higher confidence
+            status = keo.get("status")
             is_major = coin.upper() in config.auto_signal_major_coins
-            min_score = config.reversal_min_score if is_major else config.reversal_alt_min_score
 
-            if score >= min_score:
-                await self._close_signal_early(keo, price, score, reasons)
+            if status == "TP1_HIT":
+                # Sau TP1: chỉ cắt khi đảo chiều mạnh (≥4 điểm), đóng tại entry
+                if score >= 4:
+                    close_price = keo["entry_price"]
+                    await self._close_signal_early(keo, close_price, score, reasons, at_entry=True)
+            else:
+                # ACTIVE / TP2_HIT: dùng threshold bình thường
+                min_score = config.reversal_min_score if is_major else config.reversal_alt_min_score
+                if score >= min_score:
+                    await self._close_signal_early(keo, price, score, reasons)
 
     async def _close_signal_early(
-        self, keo: dict, current_price: float, score: int, reasons: list[str]
+        self, keo: dict, current_price: float, score: int, reasons: list[str], at_entry: bool = False
     ):
         """Close a signal early due to trend reversal."""
         await db.close_signal_early(
             keo["id"], close_price=current_price, reason="trend_reversal", reversal_score=score
         )
         keo["status"] = "CANCELLED"
-        await self._send_reversal_cut_notification(keo, current_price, score, reasons)
+        await self._send_reversal_cut_notification(keo, current_price, score, reasons, at_entry=at_entry)
         await self._edit_signal_message(keo)
 
     async def _send_reversal_cut_notification(
-        self, keo: dict, current_price: float, score: int, reasons: list[str]
+        self, keo: dict, current_price: float, score: int, reasons: list[str], at_entry: bool = False
     ):
         """Send reversal cut notification to channel."""
         if not self._channel_id:
@@ -428,6 +437,11 @@ class SignalTracker:
                 suffix = f" ({r.split(':',1)[1]})"
             reason_lines.append(f"  • {_REASON_DISPLAY.get(base, base)}{suffix}")
 
+        if at_entry:
+            sl_label = f"🛡 Đóng tại entry ${entry:,.2f} — bảo vệ lợi nhuận TP1"
+        else:
+            sl_label = f"→ SL gốc tại ${orig_sl:,.2f} ({sl_pct:+.1f}%) — tránh được {saved_pct:.1f}%"
+
         text = (
             f"⚠️ <b>KÈO CẮT SỚM — {coin} {d}</b>\n\n"
             f"📍 Entry: ${entry:,.2f}\n"
@@ -436,7 +450,7 @@ class SignalTracker:
             f"🔄 Dấu hiệu đảo chiều ({score} điểm):\n"
             + "\n".join(reason_lines) + "\n\n"
             f"📊 {result_str}\n"
-            f"→ SL gốc tại ${orig_sl:,.2f} ({sl_pct:+.1f}%) — tránh được {saved_pct:.1f}%"
+            + sl_label
         )
         try:
             await self.bot.send_message(
