@@ -50,8 +50,11 @@ class HyperliquidWS:
                 ) as ws:
                     self._ws = ws
                     logger.success("Connected to Hyperliquid WebSocket")
-                    await self._subscribe(ws)
+                    # Run all three concurrently so _listen drains server
+                    # responses while _subscribe is sending subscriptions.
+                    # gather cancels siblings when any one raises.
                     await asyncio.gather(
+                        self._subscribe(ws),
                         self._listen(ws),
                         self._heartbeat(ws),
                     )
@@ -77,6 +80,7 @@ class HyperliquidWS:
 
         # Subscribe L2 order book for DOM analysis
         if config.dom_enabled:
+            await asyncio.sleep(0.5)  # let server digest trade subs first
             ok = []
             for coin in config.dom_coins:
                 try:
@@ -85,7 +89,7 @@ class HyperliquidWS:
                         "subscription": {"type": "l2Book", "coin": coin},
                     }))
                     ok.append(coin)
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.4)
                 except Exception as e:
                     logger.warning(f"l2Book subscribe failed for {coin}: {e}")
             if ok:
@@ -93,8 +97,12 @@ class HyperliquidWS:
 
         # Re-subscribe to all watched users (important on reconnect)
         for addr in list(self._watched_users):
-            await ws.send(json.dumps({"method": "subscribe", "subscription": {"type": "userEvents", "user": addr}}))
-            await asyncio.sleep(0.2)
+            try:
+                await ws.send(json.dumps({"method": "subscribe", "subscription": {"type": "userEvents", "user": addr}}))
+                await asyncio.sleep(0.2)
+            except Exception as e:
+                logger.warning(f"userEvents subscribe failed for {addr[:10]}: {e}")
+                break
         if self._watched_users:
             logger.info(f"Re-subscribed userEvents for {len(self._watched_users)} addresses")
 
@@ -131,6 +139,8 @@ class HyperliquidWS:
                     await self._handle_l2_book(data)
                 elif channel == "pong":
                     logger.debug("pong")
+                elif channel:
+                    logger.debug(f"WS unhandled channel={channel}: {str(data)[:120]}")
             except json.JSONDecodeError:
                 pass
 

@@ -155,7 +155,7 @@ class SignalTracker:
 
     async def cancel_signal(self, sig_id: int) -> bool:
         keo = await db.get_signal(sig_id)
-        if not keo or keo["status"] in ("SL_HIT", "TP3_HIT", "CANCELLED"):
+        if not keo or keo["status"] in ("SL_HIT", "TP1_HIT", "TP2_HIT", "TP3_HIT", "CANCELLED"):
             return False
         await db.update_signal_status(sig_id, "CANCELLED", close=True)
         keo["status"] = "CANCELLED"
@@ -257,194 +257,13 @@ class SignalTracker:
     def _is_terminal(keo: dict, new_status: str) -> bool:
         if new_status == "ACTIVE":
             return False  # Limit order just activated
-        if new_status in ("SL_HIT", "TP3_HIT", "CANCELLED"):
-            return True
-        if new_status == "TP2_HIT" and not keo.get("tp3"):
-            return True
-        if new_status == "TP1_HIT" and not keo.get("tp2") and not keo.get("tp3"):
+        if new_status in ("SL_HIT", "TP1_HIT", "TP2_HIT", "TP3_HIT", "CANCELLED"):
             return True
         return False
 
-    # ── Task 1: TP1 hit → reversal check & SL move ─────────
-    def _count_reversal_signals_soft(
-        self,
-        keo: dict,
-        trend,
-        recent_whale_events: list[dict],
-    ) -> tuple[int, list[str]]:
-        """Soft threshold (for SL move at TP1), returns (score, reason_codes)."""
-        d = keo["direction"]
-        coin = keo["coin"]
-        reasons = []
-
-        # 1. EMA weak
-        ema20 = trend.ema20
-        ema50 = trend.ema50
-        if d == "LONG" and ema20 < ema50 * 1.002:
-            reasons.append("ema_weak")
-        elif d == "SHORT" and ema20 > ema50 * 0.998:
-            reasons.append("ema_weak")
-
-        # 2. RSI weak
-        rsi = trend.rsi
-        if d == "LONG" and rsi < 52:
-            reasons.append("rsi_weak")
-        elif d == "SHORT" and rsi > 48:
-            reasons.append("rsi_weak")
-
-        # 3. MACD shrink
-        hist = trend.macd_hist
-        hist_prev = trend.macd_hist_prev
-        if hist_prev != 0 and abs(hist) / abs(hist_prev) < 0.5:
-            reasons.append("macd_shrink")
-
-        # 4. Whale opposite
-        opposite_side = "SELL" if d == "LONG" else "BUY"
-        opposite_whales = [
-            e for e in recent_whale_events
-            if e["coin"] == coin and e["side"] == opposite_side
-        ]
-        if opposite_whales:
-            reasons.append("whale_opposite")
-
-        return len(reasons), reasons
-
     async def _on_tp1_hit_async(self, keo: dict, current_price: float):
-        """Called when TP1 is hit — decide whether to move SL to entry."""
-        from src.detector.trend_detector import get_trend
-        entry = keo["entry_price"]
-        tp1 = keo.get("tp1", current_price)
-        d = keo["direction"]
-        coin = keo["coin"]
-
-        if not config.tp1_reversal_move_sl_enabled:
-            await self._send_hit_notification(keo, "TP1_HIT", current_price)
-            return
-
-        trend = get_trend(coin)
-        if trend is None:
-            await self._send_hit_notification(keo, "TP1_HIT", current_price)
-            return
-
-        score, reasons = self._count_reversal_signals_soft(keo, trend, self._recent_whale_events)
-
-        if score >= config.tp1_reversal_min_score:
-            # Move SL to entry (breakeven)
-            await db.update_signal_sl(keo["id"], entry, moved_to_entry=True, reason=",".join(reasons))
-            keo["sl_price"] = entry
-            keo["sl_moved_to_entry"] = 1
-            keo["sl_move_reason"] = ",".join(reasons)
-            await self._edit_signal_message(keo)
-            await self._send_tp1_sl_moved(keo, score, reasons, current_price)
-        elif score >= config.tp1_reversal_warn_score:
-            await self._send_tp1_warning(keo, score, reasons, current_price)
-        else:
-            await self._send_tp1_strong(keo, current_price)
-
-    async def _send_tp1_strong(self, keo: dict, current_price: float):
-        """TP1 hit, no reversal signs — hold for TP2/TP3."""
-        if not self._channel_id:
-            return
-        d = keo["direction"]
-        coin = keo["coin"]
-        entry = keo["entry_price"]
-        tp1 = keo.get("tp1", current_price)
-        tp2 = keo.get("tp2")
-        tp3 = keo.get("tp3")
-        sl = keo["sl_price"]
-        pct = abs(tp1 - entry) / entry * 100
-        text_lines = [
-            f"✅ <b>TP1 HIT — {coin} {d}</b>",
-            "",
-            f"📍 Entry: ${entry:,.2f}",
-            f"🎯 TP1: ${tp1:,.2f} (+{pct:.1f}%) ✅",
-        ]
-        if tp2:
-            text_lines.append(f"🎯 TP2: ${tp2:,.2f}")
-        if tp3:
-            text_lines.append(f"🎯 TP3: ${tp3:,.2f}")
-        text_lines += [
-            f"🛑 SL: ${sl:,.2f} (giữ nguyên)",
-            "",
-            "📊 Trend vẫn mạnh, tiếp tục hold TP2/TP3",
-        ]
-        try:
-            await self.bot.send_message(
-                chat_id=self._channel_id,
-                text="\n".join(text_lines),
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-                reply_to_message_id=keo.get("channel_msg_id"),
-            )
-        except Exception as e:
-            logger.warning(f"_send_tp1_strong error: {e}")
-
-    async def _send_tp1_warning(self, keo: dict, score: int, reasons: list[str], current_price: float):
-        """TP1 hit, 1 weak sign — warn but don't move SL."""
-        if not self._channel_id:
-            return
-        d = keo["direction"]
-        coin = keo["coin"]
-        entry = keo["entry_price"]
-        tp1 = keo.get("tp1", current_price)
-        sl = keo["sl_price"]
-        pct = abs(tp1 - entry) / entry * 100
-        reason_display = ", ".join(_REASON_DISPLAY.get(r, r) for r in reasons)
-        text = (
-            f"✅ <b>TP1 HIT — {coin} {d}</b>\n\n"
-            f"📍 Entry: ${entry:,.2f}\n"
-            f"🎯 TP1: ${tp1:,.2f} (+{pct:.1f}%) ✅\n"
-            f"🛑 SL: ${sl:,.2f} (chưa thay đổi)\n\n"
-            f"⚠️ Có {score} dấu hiệu yếu ({reason_display})\n"
-            f"→ Đang theo dõi, chưa cần hành động"
-        )
-        try:
-            await self.bot.send_message(
-                chat_id=self._channel_id, text=text,
-                parse_mode="HTML", disable_web_page_preview=True,
-                reply_to_message_id=keo.get("channel_msg_id"),
-            )
-        except Exception as e:
-            logger.warning(f"_send_tp1_warning error: {e}")
-
-    async def _send_tp1_sl_moved(self, keo: dict, score: int, reasons: list[str], current_price: float):
-        """TP1 hit, ≥2 weak signs — SL moved to entry (breakeven)."""
-        if not self._channel_id:
-            return
-        d = keo["direction"]
-        coin = keo["coin"]
-        entry = keo["entry_price"]
-        tp1 = keo.get("tp1", current_price)
-        tp2 = keo.get("tp2")
-        tp3 = keo.get("tp3")
-        pct = abs(tp1 - entry) / entry * 100
-        reason_lines = "\n".join(
-            f"  {_REASON_DISPLAY.get(r, r)} ✗" for r in reasons
-        )
-        text_lines = [
-            f"✅ <b>TP1 HIT — {coin} {d}</b>",
-            "",
-            f"📍 Entry: ${entry:,.2f}",
-            f"🎯 TP1: ${tp1:,.2f} (+{pct:.1f}%) ✅",
-        ]
-        if tp2:
-            text_lines.append(f"🎯 TP2: ${tp2:,.2f}")
-        text_lines += [
-            f"🛑 SL: ${entry:,.2f} ← dời về entry (breakeven)",
-            "",
-            f"🛡 Lý do bảo vệ vốn:\n{reason_lines}",
-            "→ Worst case: hoà vốn. Vẫn target TP2/TP3 nếu thị trường hồi",
-        ]
-        try:
-            await self.bot.send_message(
-                chat_id=self._channel_id,
-                text="\n".join(text_lines),
-                parse_mode="HTML",
-                disable_web_page_preview=True,
-                reply_to_message_id=keo.get("channel_msg_id"),
-            )
-        except Exception as e:
-            logger.warning(f"_send_tp1_sl_moved error: {e}")
+        """Called when TP1 is hit — signal closes as WIN."""
+        await self._send_hit_notification(keo, "TP1_HIT", current_price)
 
     # ── Task 2: Trend reversal cut ─────────────────────────
     def _count_reversal_signals(
