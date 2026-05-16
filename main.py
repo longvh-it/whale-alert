@@ -22,7 +22,7 @@ from src.detector.funding_detector import FundingRateDetector
 from src.detector.dom_analyzer import dom_analyzer
 from src.detector.ecosystem_detector import ecosystem_detector
 from src.detector.trend_scanner import trend_scanner
-from src.aggregator.confluence_scorer import ConfluenceScorer
+from src.aggregator.confluence_scorer import ConfluenceScorer, set_confluence_instance
 from src.bot.handlers import router
 from src.bot.signal_handlers import router as signal_router
 from src.bot.poller import PositionPoller
@@ -124,6 +124,7 @@ async def main():
     # Init multi-source components
     coinglass  = CoinglassRest(config)
     confluence = ConfluenceScorer(engine, config)
+    set_confluence_instance(confluence)
     oi_detector  = OISpikeDetector(coinglass, engine, config, confluence=confluence)
     funding_det  = FundingRateDetector(coinglass, engine, config, confluence=confluence)
 

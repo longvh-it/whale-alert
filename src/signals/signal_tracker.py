@@ -940,19 +940,26 @@ class SignalTracker:
                     )
                     return
 
-        note = f"Multi-TF {confirmed}/3 | RSI {trend.rsi:.0f} | ATR {atr:.2f}"
+        # Query live confluence score from buffer
+        from src.aggregator.confluence_scorer import get_confluence_score
+        confluence_score = get_confluence_score(coin.upper(), direction)
 
-        # Task 6 — quality score (with DOM)
+        volume_ratio = size_usd / min_usd
+        note = f"Multi-TF {confirmed}/3 | RSI {trend.rsi:.0f} | ATR {atr:.2f} | CF {confluence_score}"
+
+        # Task 6 — quality score (with DOM + confluence + volume)
         quality = self._calc_signal_quality(
             whale_size_usd=size_usd,
             trend_confirmed=confirmed,
-            confluence_score=0,
+            confluence_score=confluence_score,
+            volume_ratio=volume_ratio,
             dom_snapshot=dom_snapshot,
             signal_direction=direction,
         )
         if quality < config.signal_min_quality_score:
             logger.info(
-                f"Auto-signal skipped: {coin} quality={quality} < {config.signal_min_quality_score}"
+                f"Auto-signal skipped: {coin} quality={quality} < {config.signal_min_quality_score} "
+                f"(trend={confirmed}/3, cf={confluence_score}, vol_ratio={volume_ratio:.1f})"
             )
             return
 

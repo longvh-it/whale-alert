@@ -1,6 +1,7 @@
 import asyncio
 import time
 from collections import defaultdict
+from typing import Optional
 
 from loguru import logger
 
@@ -28,6 +29,17 @@ class ConfluenceScorer:
         self._buffer: list[dict] = []
         # Cooldown per (symbol, direction) to avoid re-firing within same window
         self._last_alert: dict[str, float] = {}
+
+    def get_score(self, symbol: str, direction: str) -> int:
+        """Return number of unique sources within the current window for (symbol, direction)."""
+        now = time.time()
+        window = self.cfg.confluence_window
+        sources = {
+            s["source"]
+            for s in self._buffer
+            if s["symbol"] == symbol and s["direction"] == direction and now - s["ts"] <= window
+        }
+        return len(sources)
 
     def ingest(self, symbol: str, direction: str, source: str, size_usd: float = 0.0):
         """Record a directional signal from a source. Thread-safe (GIL)."""
@@ -113,3 +125,19 @@ class ConfluenceScorer:
             f"Confluence: {symbol} {direction} sources={score}/{len(ALL_SOURCES)} "
             f"weighted={weighted_score}/{_MAX_WEIGHTED_SCORE}"
         )
+
+
+# Module-level singleton — set by main.py after instantiation
+_instance: Optional["ConfluenceScorer"] = None
+
+
+def set_confluence_instance(scorer: "ConfluenceScorer") -> None:
+    global _instance
+    _instance = scorer
+
+
+def get_confluence_score(symbol: str, direction: str) -> int:
+    """Query current source count for (symbol, direction) within the confluence window."""
+    if _instance is None:
+        return 0
+    return _instance.get_score(symbol, direction)
