@@ -108,9 +108,21 @@ class SignalTracker:
         self._scan_last_signal: dict[str, float] = {}  # coin → monotonic timestamp
 
     # ── REST price poll loop ───────────────────────────────
+    async def refresh_active_signals(self):
+        """Edit lại tất cả tin nhắn signal đang PENDING/ACTIVE trong channel."""
+        if not self._channel_id:
+            return
+        signals = await db.get_active_signals()
+        for keo in signals:
+            if keo.get("channel_msg_id"):
+                await self._edit_signal_message(keo)
+                await asyncio.sleep(0.3)  # tránh flood Telegram API
+        logger.info(f"refresh_active_signals: edited {len(signals)} signal(s)")
+
     async def start_price_poll(self, interval: int = 5):
         """Chạy song song với bot — poll giá qua REST mỗi N giây."""
         logger.info(f"SignalTracker price poll started (every {interval}s)")
+        await self.refresh_active_signals()
         while True:
             try:
                 mids = await rest.get_all_mids()
