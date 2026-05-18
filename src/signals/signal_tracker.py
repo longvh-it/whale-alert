@@ -52,6 +52,22 @@ STATUS_LABEL = {
 
 SEP = "━" * 18
 
+
+def fmt_price(price: float) -> str:
+    """Format giá với số thập phân phù hợp, tránh làm tròn mất nghĩa cho altcoin nhỏ."""
+    if price == 0:
+        return "0"
+    abs_p = abs(price)
+    if abs_p >= 1000:
+        return f"{price:,.2f}"
+    if abs_p >= 1:
+        return f"{price:,.3f}"
+    if abs_p >= 0.01:
+        return f"{price:,.4f}"
+    if abs_p >= 0.0001:
+        return f"{price:,.5f}"
+    return f"{price:,.6f}"
+
 # Reason code → display text
 _REASON_DISPLAY = {
     "ema_weak":       "EMA20 yếu so với EMA50",
@@ -438,14 +454,14 @@ class SignalTracker:
             reason_lines.append(f"  • {_REASON_DISPLAY.get(base, base)}{suffix}")
 
         if at_entry:
-            sl_label = f"🛡 Đóng tại entry ${entry:,.2f} — bảo vệ lợi nhuận TP1"
+            sl_label = f"🛡 Đóng tại entry ${fmt_price(entry)} — bảo vệ lợi nhuận TP1"
         else:
-            sl_label = f"→ SL gốc tại ${orig_sl:,.2f} ({sl_pct:+.1f}%) — tránh được {saved_pct:.1f}%"
+            sl_label = f"→ SL gốc tại ${fmt_price(orig_sl)} ({sl_pct:+.1f}%) — tránh được {saved_pct:.1f}%"
 
         text = (
             f"⚠️ <b>KÈO CẮT SỚM — {coin} {d}</b>\n\n"
-            f"📍 Entry: ${entry:,.2f}\n"
-            f"📉 Giá lúc cắt: ${current_price:,.2f} ({pnl_pct:+.1f}%)\n"
+            f"📍 Entry: ${fmt_price(entry)}\n"
+            f"📉 Giá lúc cắt: ${fmt_price(current_price)} ({pnl_pct:+.1f}%)\n"
             f"⏱ Thời gian giữ: {duration_str}\n\n"
             f"🔄 Dấu hiệu đảo chiều ({score} điểm):\n"
             + "\n".join(reason_lines) + "\n\n"
@@ -496,14 +512,14 @@ class SignalTracker:
         if current_price is not None:
             raw_diff = (current_price - entry) / entry * 100
             diff_pct = raw_diff if d == "LONG" else -raw_diff
-            price_line = f"\n→ Giá hiện tại: ${current_price:,.2f} (cách entry {diff_pct:+.1f}%)"
+            price_line = f"\n→ Giá hiện tại: ${fmt_price(current_price)} (cách entry {diff_pct:+.1f}%)"
         else:
             price_line = ""
 
         text = (
             f"⏰ <b>KÈO HẾT HẠN — {coin} {d}</b>\n\n"
             f"Kèo LIMIT chờ {age_hours:.1f}h chưa được fill.\n"
-            f"📍 Entry limit: <b>${entry:,.2f}</b>\n"
+            f"📍 Entry limit: <b>${fmt_price(entry)}</b>\n"
             f"💀 Tự động huỷ.{price_line}"
         )
         try:
@@ -634,14 +650,14 @@ class SignalTracker:
             header = "📍 <b>VÀO LỆNH</b>"
             body = (
                 f"{dir_emoji} {d} {coin}  <code>#{sig_id:04d}</code>\n"
-                f"Limit entry đã chạm: <b>${price:,.2f}</b>\n"
+                f"Limit entry đã chạm: <b>${fmt_price(price)}</b>\n"
                 f"⚡ TP/SL tracking bắt đầu"
             )
         elif new_status == "SL_HIT":
             header = "❌ <b>SL BỊ HIT</b>"
             body = (
                 f"{dir_emoji} {d} {coin}  <code>#{sig_id:04d}</code>\n"
-                f"📍 ${entry:,.2f} → <b>${price:,.2f}</b>\n"
+                f"📍 ${fmt_price(entry)} → <b>${fmt_price(price)}</b>\n"
                 f"💸 -{pct:.1f}%"
             )
         elif new_status.startswith("TP"):
@@ -650,7 +666,7 @@ class SignalTracker:
             header = f"✅ <b>TP{tp_num} ĐÃ CHẠM</b>"
             body = (
                 f"{dir_emoji} {d} {coin}  <code>#{sig_id:04d}</code>\n"
-                f"📍 ${entry:,.2f} → <b>${tp_val:,.2f}</b>\n"
+                f"📍 ${fmt_price(entry)} → <b>${fmt_price(tp_val)}</b>\n"
                 f"💰 +{pct:.1f}%"
             )
         else:
@@ -708,17 +724,17 @@ class SignalTracker:
         lines = [
             f"{dir_emoji} <b>{d} {coin}</b>{lev_str}  <code>#{sig_id:04d}</code>{quality_str}{order_badge}",
             SEP,
-            f"📍 Entry: <b>${entry:,.2f}</b>",
+            f"📍 Entry: <b>${fmt_price(entry)}</b>",
             SEP,
         ]
 
         for val, num in [(tp1, 1), (tp2, 2), (tp3, 3)]:
             if val is None:
                 continue
-            lines.append(f"{tp_emoji(num)} TP{num}: <b>${val:,.2f}</b>  <i>({pct(val)})</i>")
+            lines.append(f"{tp_emoji(num)} TP{num}: <b>${fmt_price(val)}</b>  <i>({pct(val)})</i>")
 
         lines.append(SEP)
-        sl_label = f"{sl_emoji} SL: <b>${sl:,.2f}</b>  <i>({pct(sl)})</i>"
+        sl_label = f"{sl_emoji} SL: <b>${fmt_price(sl)}</b>  <i>({pct(sl)})</i>"
         if sl_moved:
             sl_label += " <i>← breakeven</i>"
         lines.append(sl_label)
