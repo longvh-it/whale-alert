@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-A Telegram bot that monitors whale trading activity on Hyperliquid DEX and cross-exchange signals (Binance Futures, Bybit Futures, Coinglass). Detects large trades, liquidations, OI spikes, funding extremes, and multi-source confluence. Also runs a signal (kèo) system: auto-creates paper trades when whale activity confirms a technical trend, tracks TP/SL hits in real time, and posts results to a Telegram channel.
+A Telegram bot that monitors whale trading activity on Hyperliquid DEX and cross-exchange signals (Binance Futures, Bybit Futures, OKX Futures, Coinglass). Detects large trades, liquidations, OI spikes, funding extremes, and multi-source confluence. Also runs a signal (kèo) system: auto-creates paper trades when whale activity, TradingView webhooks, or trend scans confirm a technical trend, tracks TP/SL hits in real time, and posts results to a Telegram channel.
 
 ## Running the Bot
 
@@ -26,7 +26,9 @@ Key variable groups:
 - **Whale thresholds**: `MIN_TRADE_SIZE_USD`, `MIN_POSITION_SIZE_USD`, `MIN_LIQUIDATION_SIZE_USD`
 - **Signal (kèo)**: `AUTO_SIGNAL_ENABLED`, `AUTO_SIGNAL_MIN_USD` (BTC/ETH), `AUTO_SIGNAL_MIN_USD_ALT` (altcoins), `AUTO_SIGNAL_MAJOR_COINS`
 - **Trend detector**: `TREND_POLL_INTERVAL_1H/4H/1D` (multi-timeframe), `TREND_MIN_SCORE` (default 2/3), `TREND_ATR_SL_MULT`, `TREND_ATR_TP_MULT`
-- **Multi-source**: `BINANCE_ENABLED`, `BYBIT_ENABLED`, `COINGLASS_API_KEY`, `OI_SPIKE_THRESHOLD`, `FUNDING_EXTREME_HIGH/LOW`, `CONFLUENCE_ENABLED`, `CONFLUENCE_MIN_SCORE_WEIGHTED`
+- **Multi-source**: `BINANCE_ENABLED`, `BYBIT_ENABLED`, `OKX_ENABLED`, `OKX_SYMBOLS` (list), `COINGLASS_API_KEY`, `OI_SPIKE_THRESHOLD`, `FUNDING_EXTREME_HIGH/LOW`, `CONFLUENCE_ENABLED`, `CONFLUENCE_MIN_SCORE_WEIGHTED`
+- **TradingView webhook**: `TV_WEBHOOK_ENABLED`, `TV_WEBHOOK_PORT` (default 8080), `TV_WEBHOOK_SECRET` (validated via `X-TV-Secret` header or `?secret=` query param)
+- **Trend scanner**: `SCAN_ENABLED`, `SCAN_VOLUME_MIN` (default 2×), `SCAN_MIN_TREND_SCORE` (default 2/3), `SCAN_DAILY_MAX` (default 2), `SCAN_COIN_COOLDOWN_HOURS` (default 24)
 - **Signal lifecycle**: `REVERSAL_CUT_ENABLED`, `REVERSAL_MIN_SCORE`, `REVERSAL_GRACE_MINUTES`, `SIGNAL_PENDING_TIMEOUT_HOURS`, `DAILY_SL_LIMIT`, `DAILY_LOSS_LIMIT_ENABLED`, `SIGNAL_MIN_QUALITY_SCORE`
 - **DOM analysis**: `DOM_ENABLED`, `DOM_COINS`, `DOM_WALL_MIN_USD`, `DOM_WALL_DISTANCE_MAX_PCT`, `DOM_BID_ASK_BULLISH/BEARISH`, `DOM_ABSORPTION_PCT_THRESHOLD`, `DOM_BOOK_DEPTH_LEVELS`
 - **Ecosystem**: `ECOSYSTEM_ENABLED`, `ECOSYSTEM_VOLUME_SPIKE_MIN`, `ECOSYSTEM_CALL_MIN_TREND_SCORE`, `ECOSYSTEM_SIGNAL_QUALITY_PENALTY`
@@ -37,7 +39,8 @@ Key variable groups:
 ```
 Binance WS ──┐
 Bybit WS ────┤→ AlertEngine → Telegram channel/users
-Hyperliquid ─┤→ WhaleDetector
+OKX WS ──────┤→ WhaleDetector
+Hyperliquid ─┤
   L2 book ───┤→ DOMAnalyzer → DOMSnapshot (BULLISH/BEARISH/NEUTRAL)
              │
 Coinglass REST (poll) → OISpikeDetector, FundingRateDetector
@@ -46,12 +49,23 @@ Coinglass REST (poll) → OISpikeDetector, FundingRateDetector
 
 Binance REST (1h/4h/1d klines, poll) → TrendDetector → _trend_cache
                                                               ↓
-                                                 SignalTracker.maybe_create_auto_signal()
-                                                 (whale trade → trend gate → quality score → kèo)
+                                         ┌────────────────────────────────────┐
+                                         │  SignalTracker signal creation:    │
+                                         │  maybe_create_auto_signal()        │ ← whale trade
+                                         │  maybe_create_ecosystem_signal()   │ ← ecosystem spike
+                                         │  maybe_create_tv_signal()          │ ← TradingView webhook
+                                         │  TrendScanner.on_volume_spike()    │ ← volume spike scan
+                                         └────────────────────────────────────┘
 
 Volume spike (any source) → EcosystemDetector → scan related coins
                                                       ↓ (whale + DOM + trend all confirm)
                                              maybe_create_ecosystem_signal()
+
+TradingView Pine Script → HTTP POST → tv_webhook.py → maybe_create_tv_signal()
+  (bypasses trend gate — TP/SL provided explicitly by Pine Script alert)
+
+4h candle poll (volume spike) → TrendScanner.on_volume_spike()
+  (no whale needed — volume ratio + multi-TF trend score → kèo, max SCAN_DAILY_MAX/day)
 ```
 
 **Startup flow** (`main.py`): logging → DB init → Telegram bot → SignalTracker → DOMAnalyzer + EcosystemDetector (wired via setters) → WhaleDetector + AlertEngine → register WS event handlers → PositionPoller → `asyncio.gather()` all long-running coroutines.
@@ -62,6 +76,7 @@ Volume spike (any source) → EcosystemDetector → scan related coins
 - `hyperliquid_ws.py` — subscribes `trades` + `userEvents`, auto-reconnects with 5s backoff
 - `binance_ws.py` — Binance Futures aggTrade + forceOrder streams
 - `bybit_ws.py` — Bybit V5 linear public stream, 20s heartbeat
+- `okx_ws.py` — OKX Futures SWAP public stream; fetches contract values (`ctVal`) from REST on startup to convert contract counts to USD
 - `coinglass_rest.py` — poll-based, returns dicts (no events); fallback to Binance public REST if no API key
 
 **`src/detector/whale_detector.py`** — Parses raw payloads into `WhaleAlert` dataclass. `AlertType` enum: `BIG_TRADE`, `LARGE_POSITION`, `LIQUIDATION`, `POSITION_FLIP`, `PNL_MILESTONE`, `WATCHLIST_TRADE`, `OI_SPIKE`, `FUNDING_EXTREME`, `CONFLUENCE`. Tracks per-address position history for flip detection. All message formatting lives in `WhaleAlert.format_message()`.
@@ -96,13 +111,17 @@ Volume spike (any source) → EcosystemDetector → scan related coins
 
 **`src/bot/signal_handlers.py`** — Admin-only commands: `/signal` (create kèo manually), `/cancel`, `/signals`, `/signal_stats`, `/signal_report`, `/whales`, `/whale_scores`.
 
+**`src/bot/tv_webhook.py`** — aiohttp server for TradingView Pine Script alerts. Payload: `{coin, direction, entry?, tp1, tp2?, tp3?, sl, leverage?, note?}`. Bypasses the trend gate — TP/SL values come from the Pine Script alert directly. Secret validated via `X-TV-Secret` header or `?secret=` query param.
+
+**`src/detector/trend_scanner.py`** — `TrendScanner` class (singleton wired in `main.py`). Called by `trend_detector` after each 4h candle poll when volume spike is detected. Creates kèo without requiring a whale event, subject to `SCAN_DAILY_MAX` per day and `SCAN_COIN_COOLDOWN_HOURS` per coin. DOM is checked as a soft gate (BEARISH DOM blocks LONG scan, not just neutral).
+
 **`src/bot/poller.py`** — `PositionPoller`: polls open whale positions via Hyperliquid REST every N seconds, calculates real-time PnL, fires `PNL_MILESTONE` alerts, and edits the original Telegram message in-place via `auto_watch_msgs`.
 
 **`src/api/hyperliquid_rest.py`** — Thin async REST wrapper around `https://api.hyperliquid.xyz/info`. Used by `PositionPoller` for open positions and by `SignalTracker` for current mark prices.
 
 **`src/storage/database.py`** — Single `Database` class, async SQLite via `aiosqlite`. Singleton `db`. Tables: `users`, `watchlist`, `alert_log`, `known_whales`, `whale_scores`, `auto_watch`, `auto_watch_msgs`, `signals`. Schema migrations run at init via `ALTER TABLE ... ADD COLUMN` wrapped in try/except.
 
-Key `signals` columns: `coin`, `direction` (LONG/SHORT), `entry_price`, `tp1/tp2/tp3`, `sl_price`, `leverage`, `status`, `order_type` (MARKET/LIMIT), `source` (ADMIN/AUTO), `channel_msg_id` (Telegram message to edit on TP/SL hit).
+Key `signals` columns: `coin`, `direction` (LONG/SHORT), `entry_price`, `tp1/tp2/tp3`, `sl_price`, `leverage`, `status`, `order_type` (MARKET/LIMIT), `source` (`ADMIN` | `AUTO` | `TV` | `TREND_SCAN`), `channel_msg_id` (Telegram message to edit on TP/SL hit).
 
 ## Signal (Kèo) Auto-Creation Logic
 
