@@ -6,3 +6,4 @@ aiosqlite>=0.20.0
 python-dotenv>=1.0.1
 hyperliquid-python-sdk>=0.23.0
 loguru>=0.7.2
+openpyxl>=3.1.0

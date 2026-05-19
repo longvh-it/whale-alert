@@ -720,4 +720,22 @@ class Database:
             return [dict(zip(cols, r)) for r in rows]
 
 
+    async def get_all_signals_for_export(self) -> list[dict]:
+        """Tất cả signals cho export Excel — không giới hạn số lượng."""
+        async with aiosqlite.connect(self.db_path) as conn:
+            cursor = await conn.execute(
+                "SELECT id, coin, direction, entry_price, tp1, tp2, tp3, sl_price, "
+                "leverage, status, order_type, source, note, "
+                "quality_score, created_at, closed_at, close_price, close_reason "
+                "FROM signals ORDER BY id DESC"
+            )
+            rows = await cursor.fetchall()
+            cols = [
+                "id", "coin", "direction", "entry_price", "tp1", "tp2", "tp3",
+                "sl_price", "leverage", "status", "order_type", "source", "note",
+                "quality_score", "created_at", "closed_at", "close_price", "close_reason",
+            ]
+            return [dict(zip(cols, r)) for r in rows]
+
+
 db = Database()

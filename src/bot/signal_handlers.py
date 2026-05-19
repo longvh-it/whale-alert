@@ -2,7 +2,7 @@ import re
 from datetime import datetime, timezone
 from aiogram import Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, BufferedInputFile
 from loguru import logger
 
 from src.storage.database import db
@@ -460,3 +460,51 @@ async def cmd_signal_report(msg: Message):
             parts.append(_format_closed_row(s))
 
     await msg.answer("\n".join(parts), parse_mode="HTML")
+
+
+# ── /export_excel ──────────────────────────────────────────
+@router.message(Command("export_excel"))
+async def cmd_export_excel(msg: Message):
+    if not _is_admin(msg.chat.id):
+        await msg.answer("❌ Chỉ admin mới xuất được báo cáo.")
+        return
+
+    signals = await db.get_all_signals_for_export()
+    if not signals:
+        await msg.answer("📋 Chưa có dữ liệu kèo nào.")
+        return
+
+    wait_msg = await msg.answer("⏳ Đang tạo file Excel…")
+
+    try:
+        from src.utils.excel_export import build_excel
+        xlsx_bytes = build_excel(signals)
+    except Exception as e:
+        logger.exception(f"export_excel lỗi: {e}")
+        await wait_msg.delete()
+        await msg.answer(f"❌ Lỗi khi tạo file: {e}")
+        return
+
+    now = datetime.now().strftime("%Y%m%d_%H%M")
+    filename = f"keo_report_{now}.xlsx"
+
+    closed   = sum(1 for s in signals if s["status"] in ("TP1_HIT", "TP2_HIT", "TP3_HIT", "SL_HIT"))
+    wins     = sum(1 for s in signals if s["status"] in ("TP1_HIT", "TP2_HIT", "TP3_HIT"))
+    win_rate = wins / closed * 100 if closed else 0
+
+    caption = (
+        f"📊 <b>Báo cáo kèo</b> — {now}\n\n"
+        f"📌 Tổng: <b>{len(signals)}</b>  |  "
+        f"✅ Thắng: <b>{wins}</b>  |  "
+        f"❌ Thua: <b>{closed - wins}</b>\n"
+        f"🎯 Win rate: <b>{win_rate:.1f}%</b>\n\n"
+        f"<i>File gồm 5 sheet: Tổng quan · Tất cả kèo · "
+        f"Kèo thắng · Kèo thua · Theo nguồn</i>"
+    )
+
+    await wait_msg.delete()
+    await msg.answer_document(
+        document=BufferedInputFile(xlsx_bytes, filename=filename),
+        caption=caption,
+        parse_mode="HTML",
+    )
