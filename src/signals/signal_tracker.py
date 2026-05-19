@@ -722,7 +722,7 @@ class SignalTracker:
 
     # ── Format ─────────────────────────────────────────────
     @staticmethod
-    def format_signal(keo: dict) -> str:
+    def format_signal(keo: dict, show_sim: bool = False) -> str:
         status = keo["status"]
         d = keo["direction"]
         coin = keo["coin"]
@@ -783,9 +783,10 @@ class SignalTracker:
             rr = abs(tp_last - entry) / abs(sl - entry)
             lines.append(f"⚖️ R:R ≈ 1:{rr:.1f}")
 
-        # Sim P&L block
-        lines.append(_sim_block(entry, tp1, tp2, tp3, sl, d))
-        lines.append(SEP)
+        # Sim P&L block (chỉ hiện trong bot, không đăng channel)
+        if show_sim:
+            lines.append(_sim_block(entry, tp1, tp2, tp3, sl, d))
+            lines.append(SEP)
 
         # Source
         if source == "WHALE" and whale:
