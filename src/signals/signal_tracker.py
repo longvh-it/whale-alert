@@ -51,6 +51,31 @@ STATUS_LABEL = {
 }
 
 SEP = "━" * 18
+_SIM_VOL = 200.0          # giả định position size (USD)
+_BYBIT_TAKER = 0.00055    # 0.055% mỗi chiều
+
+
+def _sim_block(entry: float, tp1, tp2, tp3, sl: float, direction: str) -> str:
+    """Trả về block giả định lời/lỗ với _SIM_VOL USD position, phí Bybit taker 2 chiều."""
+    fee = _SIM_VOL * _BYBIT_TAKER * 2  # open + close
+
+    def pnl(target: float) -> float:
+        raw = (target - entry) / entry * _SIM_VOL
+        if direction == "SHORT":
+            raw = -raw
+        return raw - fee
+
+    parts = []
+    for label, val in [("TP1", tp1), ("TP2", tp2), ("TP3", tp3)]:
+        if val is None:
+            continue
+        p = pnl(val)
+        parts.append(f"{label}: <b>+${p:.2f}</b>")
+    sl_p = pnl(sl)
+    parts.append(f"SL: <b>-${abs(sl_p):.2f}</b>")
+
+    inner = "  |  ".join(parts)
+    return f"💵 <i>Giả định ${_SIM_VOL:.0f} pos (phí ~${fee:.2f}):</i>\n{inner}"
 
 
 def fmt_price(price: float) -> str:
@@ -757,6 +782,10 @@ class SignalTracker:
         if tp_last and abs(sl - entry) > 0:
             rr = abs(tp_last - entry) / abs(sl - entry)
             lines.append(f"⚖️ R:R ≈ 1:{rr:.1f}")
+
+        # Sim P&L block
+        lines.append(_sim_block(entry, tp1, tp2, tp3, sl, d))
+        lines.append(SEP)
 
         # Source
         if source == "WHALE" and whale:
