@@ -508,3 +508,37 @@ async def cmd_export_excel(msg: Message):
         caption=caption,
         parse_mode="HTML",
     )
+
+
+# ── /sim_vol ───────────────────────────────────────────────
+@router.message(Command("sim_vol"))
+async def cmd_sim_vol(msg: Message):
+    if not _is_admin(msg.chat.id):
+        await msg.answer("❌ Chỉ admin mới đổi được mức giả định.")
+        return
+
+    parts = msg.text.split()
+    if len(parts) < 2:
+        cur = st_module._SIM_VOL
+        await msg.answer(
+            f"💵 <b>Giả định P&amp;L hiện tại: ${cur:.0f}</b>\n\n"
+            f"Dùng <code>/sim_vol [số]</code> để đổi.\n"
+            f"Ví dụ: <code>/sim_vol 500</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        amount = float(parts[1])
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        await msg.answer("❌ Số tiền không hợp lệ. Ví dụ: <code>/sim_vol 500</code>", parse_mode="HTML")
+        return
+
+    st_module._SIM_VOL = amount
+    await msg.answer(
+        f"✅ Đã đổi mức giả định thành <b>${amount:.0f}</b>.\n"
+        f"Các kèo tiếp theo sẽ tính theo mức này.",
+        parse_mode="HTML",
+    )

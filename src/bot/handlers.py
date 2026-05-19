@@ -54,7 +54,8 @@ async def cmd_start(msg: Message):
         "/top — top PnL cao nhất\n"
         "/settings — xem cài đặt\n"
         "/help — hướng dẫn đầy đủ\n"
-        "/export_excel — 📊 xuất thống kê kèo Excel <i>(admin)</i>",
+        "/export_excel — 📊 xuất thống kê kèo Excel <i>(admin)</i>\n"
+        "/sim_vol — 💵 đổi mức vốn giả định P&amp;L <i>(admin)</i>",
         parse_mode="HTML",
     )
 
@@ -84,7 +85,8 @@ async def cmd_help(msg: Message):
         "<b>Xem thống kê:</b>\n"
         "<code>/top</code> — top PnL đang theo dõi (4h gần nhất)\n\n"
         "<b>Admin:</b>\n"
-        "<code>/export_excel</code> — xuất thống kê kèo ra file Excel",
+        "<code>/export_excel</code> — xuất thống kê kèo ra file Excel\n"
+        "<code>/sim_vol [số]</code> — đổi mức vốn giả định P&amp;L (mặc định $200)",
         parse_mode="HTML",
     )
 
