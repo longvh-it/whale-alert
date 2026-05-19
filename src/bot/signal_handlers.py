@@ -511,34 +511,106 @@ async def cmd_export_excel(msg: Message):
 
 
 # ── /sim_vol ───────────────────────────────────────────────
+_CLOSED_STATUSES = {"TP1_HIT", "TP2_HIT", "TP3_HIT", "SL_HIT", "CANCELLED"}
+_STATUS_EMOJI = {
+    "TP1_HIT": "🎯", "TP2_HIT": "🎯🎯", "TP3_HIT": "🎯🎯🎯",
+    "SL_HIT": "❌", "CANCELLED": "🚫",
+}
+
+
+def _calc_sim_pnl(s: dict, vol: float) -> float:
+    """Tính P&L giả định cho 1 signal đã đóng."""
+    entry = s.get("entry_price") or 0
+    if not entry:
+        return 0.0
+    status = s["status"]
+    d = s["direction"]
+    fee = vol * st_module._BYBIT_TAKER * 2
+
+    if status == "SL_HIT":
+        exit_price = s.get("close_price") or s["sl_price"]
+    elif status == "TP3_HIT":
+        exit_price = s.get("close_price") or s.get("tp3") or s.get("tp2") or s.get("tp1") or entry
+    elif status == "TP2_HIT":
+        exit_price = s.get("close_price") or s.get("tp2") or s.get("tp1") or entry
+    elif status == "TP1_HIT":
+        exit_price = s.get("close_price") or s.get("tp1") or entry
+    else:  # CANCELLED
+        exit_price = s.get("close_price") or entry
+
+    raw = (exit_price - entry) / entry * vol
+    if d == "SHORT":
+        raw = -raw
+    return raw - fee
+
+
 @router.message(Command("sim_vol"))
 async def cmd_sim_vol(msg: Message):
     if not _is_admin(msg.chat.id):
-        await msg.answer("❌ Chỉ admin mới đổi được mức giả định.")
+        await msg.answer("❌ Chỉ admin mới dùng được lệnh này.")
         return
 
     parts = msg.text.split()
-    if len(parts) < 2:
-        cur = st_module._SIM_VOL
+
+    # Đổi mức vốn: /sim_vol 500
+    if len(parts) >= 2:
+        try:
+            amount = float(parts[1])
+            if amount <= 0:
+                raise ValueError
+        except ValueError:
+            await msg.answer("❌ Số tiền không hợp lệ. Ví dụ: <code>/sim_vol 500</code>", parse_mode="HTML")
+            return
+        st_module._SIM_VOL = amount
         await msg.answer(
-            f"💵 <b>Giả định P&amp;L hiện tại: ${cur:.0f}</b>\n\n"
-            f"Dùng <code>/sim_vol [số]</code> để đổi.\n"
-            f"Ví dụ: <code>/sim_vol 500</code>",
+            f"✅ Đã đổi mức giả định thành <b>${amount:.0f}</b>.",
             parse_mode="HTML",
         )
         return
 
-    try:
-        amount = float(parts[1])
-        if amount <= 0:
-            raise ValueError
-    except ValueError:
-        await msg.answer("❌ Số tiền không hợp lệ. Ví dụ: <code>/sim_vol 500</code>", parse_mode="HTML")
+    # Hiển thị P&L các lệnh đã đóng
+    vol = st_module._SIM_VOL
+    signals = await db.get_all_signals_for_export()
+    closed = [s for s in signals if s["status"] in _CLOSED_STATUSES]
+
+    if not closed:
+        await msg.answer(
+            f"💵 <b>Giả định ${vol:.0f} pos — chưa có kèo đã đóng</b>\n\n"
+            f"Dùng <code>/sim_vol [số]</code> để đổi mức vốn.",
+            parse_mode="HTML",
+        )
         return
 
-    st_module._SIM_VOL = amount
-    await msg.answer(
-        f"✅ Đã đổi mức giả định thành <b>${amount:.0f}</b>.\n"
-        f"Các kèo tiếp theo sẽ tính theo mức này.",
-        parse_mode="HTML",
-    )
+    total_pnl = 0.0
+    lines = [f"💵 <b>Giả định ${vol:.0f} pos (Bybit taker fee)</b>", ""]
+
+    for s in closed[:30]:  # giới hạn 30 lệnh gần nhất
+        pnl = _calc_sim_pnl(s, vol)
+        total_pnl += pnl
+        emoji = _STATUS_EMOJI.get(s["status"], "—")
+        d_emoji = "🟢" if s["direction"] == "LONG" else "🔴"
+        sign = "+" if pnl >= 0 else ""
+        tp_info = ""
+        if s.get("tp1"):
+            tps = [f"TP1=${_fmt(s['tp1'])}"]
+            if s.get("tp2"):
+                tps.append(f"TP2=${_fmt(s['tp2'])}")
+            if s.get("tp3"):
+                tps.append(f"TP3=${_fmt(s['tp3'])}")
+            tp_info = "  <i>" + " · ".join(tps) + f" · SL=${_fmt(s['sl_price'])}</i>"
+        lines.append(
+            f"{emoji} {d_emoji} <b>{s['coin']}</b> #{s['id']:04d} "
+            f"→ <b>{sign}${pnl:.2f}</b>{tp_info}"
+        )
+
+    sign_total = "+" if total_pnl >= 0 else ""
+    lines += [
+        "",
+        f"━━━━━━━━━━━━━━━━━━",
+        f"💰 Tổng P&amp;L giả định: <b>{sign_total}${total_pnl:.2f}</b>  "
+        f"<i>({len(closed)} lệnh)</i>",
+        "",
+        f"<i>Dùng /sim_vol [số] để đổi mức vốn</i>",
+    ]
+
+    await msg.answer("\n".join(lines), parse_mode="HTML")
