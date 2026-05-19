@@ -104,6 +104,7 @@ async def main():
         BotCommand(command="signal_report", description="[Admin] Chi tiết kèo thắng/thua"),
         BotCommand(command="whales",        description="[Admin] Danh sách known whales"),
         BotCommand(command="whale_scores",  description="[Admin] Bảng xếp hạng whale theo win rate"),
+        BotCommand(command="export_excel",  description="[Admin] Xuất thống kê kèo ra file Excel"),
     ])
 
     # Init detector & alert engine

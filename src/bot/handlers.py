@@ -53,7 +53,8 @@ async def cmd_start(msg: Message):
         "/remove — xóa địa chỉ\n"
         "/top — top PnL cao nhất\n"
         "/settings — xem cài đặt\n"
-        "/help — hướng dẫn đầy đủ",
+        "/help — hướng dẫn đầy đủ\n"
+        "/export_excel — 📊 xuất thống kê kèo Excel <i>(admin)</i>",
         parse_mode="HTML",
     )
 
@@ -81,7 +82,9 @@ async def cmd_help(msg: Message):
         "/filter — chọn preset nhanh\n"
         "🐟 Cá nhỏ &gt;$50K  |  🐋 Cá to &gt;$200K  |  🦈 Cá khủng &gt;$1M\n\n"
         "<b>Xem thống kê:</b>\n"
-        "<code>/top</code> — top PnL đang theo dõi (4h gần nhất)",
+        "<code>/top</code> — top PnL đang theo dõi (4h gần nhất)\n\n"
+        "<b>Admin:</b>\n"
+        "<code>/export_excel</code> — xuất thống kê kèo ra file Excel",
         parse_mode="HTML",
     )
 
