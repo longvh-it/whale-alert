@@ -1,8 +1,8 @@
 import re
 from datetime import datetime, timezone
-from aiogram import Router
+from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, BufferedInputFile
+from aiogram.types import Message, BufferedInputFile, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from loguru import logger
 
 from src.storage.database import db
@@ -613,4 +613,53 @@ async def cmd_sim_vol(msg: Message):
         f"<i>Dùng /sim_vol [số] để đổi mức vốn</i>",
     ]
 
-    await msg.answer("\n".join(lines), parse_mode="HTML")
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="📊 Xuất Excel", callback_data="sim_export_excel"),
+    ]])
+    await msg.answer("\n".join(lines), parse_mode="HTML", reply_markup=kb)
+
+
+@router.callback_query(F.data == "sim_export_excel")
+async def cb_sim_export_excel(cb: CallbackQuery):
+    if not _is_admin(cb.from_user.id):
+        await cb.answer("❌ Chỉ admin mới xuất được.", show_alert=True)
+        return
+
+    await cb.answer("⏳ Đang tạo file…")
+    signals = await db.get_all_signals_for_export()
+    if not signals:
+        await cb.message.answer("📋 Chưa có dữ liệu kèo nào.")
+        return
+
+    vol = st_module._SIM_VOL
+    # Gắn thêm cột sim_pnl vào mỗi signal trước khi export
+    for s in signals:
+        if s["status"] in _CLOSED_STATUSES:
+            s["sim_pnl"] = round(_calc_sim_pnl(s, vol), 2)
+        else:
+            s["sim_pnl"] = None
+
+    try:
+        from src.utils.excel_export import build_excel
+        xlsx_bytes = build_excel(signals, sim_vol=vol)
+    except Exception as e:
+        logger.exception(f"sim export_excel lỗi: {e}")
+        await cb.message.answer(f"❌ Lỗi khi tạo file: {e}")
+        return
+
+    now = datetime.now().strftime("%Y%m%d_%H%M")
+    closed = [s for s in signals if s["status"] in _CLOSED_STATUSES]
+    wins = sum(1 for s in closed if s["status"] in ("TP1_HIT", "TP2_HIT", "TP3_HIT"))
+    total_sim = sum(s["sim_pnl"] for s in closed if s["sim_pnl"] is not None)
+    sign = "+" if total_sim >= 0 else ""
+
+    caption = (
+        f"📊 <b>Báo cáo kèo + Giả định ${vol:.0f}</b> — {now}\n\n"
+        f"✅ Thắng: <b>{wins}</b>  |  ❌ Thua: <b>{len(closed)-wins}</b>\n"
+        f"💰 Tổng P&amp;L giả định: <b>{sign}${total_sim:.2f}</b>"
+    )
+    await cb.message.answer_document(
+        document=BufferedInputFile(xlsx_bytes, filename=f"keo_sim_{now}.xlsx"),
+        caption=caption,
+        parse_mode="HTML",
+    )

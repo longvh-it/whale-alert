@@ -315,8 +315,73 @@ def _write_by_source(wb: openpyxl.Workbook, signals: list[dict]):
         ws.row_dimensions[ri].height = 18
 
 
+# ── Sheet: Giả định P&L ──────────────────────────────────────────────────
+_CLOSED_SIM = {"TP1_HIT", "TP2_HIT", "TP3_HIT", "SL_HIT", "CANCELLED"}
+
+def _write_sim_sheet(wb: openpyxl.Workbook, signals: list[dict], sim_vol: float):
+    ws = wb.create_sheet("Giả định P&L")
+    headers = [
+        ("ID", 7), ("Coin", 8), ("Dir", 7), ("Entry", 12),
+        ("TP1", 12), ("TP2", 12), ("TP3", 12), ("SL", 12),
+        ("Exit Price", 12), ("Status", 13),
+        (f"Sim P&L (${sim_vol:.0f})", 16), ("Tạo lúc", 18),
+    ]
+    for ci, (h, w) in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(ci)].width = w
+        _hdr(ws.cell(1, ci), h)
+    ws.row_dimensions[1].height = 22
+    ws.freeze_panes = "A2"
+
+    closed = [s for s in signals if s["status"] in _CLOSED_SIM]
+    total_sim = 0.0
+
+    for ri, s in enumerate(closed, start=2):
+        sim_pnl = s.get("sim_pnl")
+        is_win  = s["status"] in ("TP1_HIT", "TP2_HIT", "TP3_HIT")
+        is_loss = s["status"] == "SL_HIT"
+        row_bg  = _BG_WIN if is_win else (_BG_LOSS if is_loss else _WHITE)
+        exit_px = _exit_price(s)
+
+        vals = [
+            s["id"], s["coin"], s["direction"],
+            s["entry_price"], s.get("tp1"), s.get("tp2"), s.get("tp3"), s["sl_price"],
+            exit_px, _status_label(s["status"]),
+            sim_pnl,
+            s.get("created_at", "")[:16] if s.get("created_at") else "",
+        ]
+        for ci, val in enumerate(vals, 1):
+            c = ws.cell(ri, ci)
+            h_name = headers[ci - 1][0]
+            fmt, align, bold, color = None, "left", False, None
+            if h_name in ("Entry", "TP1", "TP2", "TP3", "SL", "Exit Price"):
+                fmt, align = '#,##0.########', "right"
+            elif "Sim P&L" in h_name:
+                fmt, align, bold = '#,##0.00;[Red]-#,##0.00', "right", True
+                if sim_pnl is not None:
+                    color = _GREEN if sim_pnl >= 0 else _RED
+                if sim_pnl is not None:
+                    total_sim += sim_pnl
+            elif h_name in ("ID", "Dir", "Status"):
+                align = "center"
+            _cell(c, val, bold=bold, color=color, align=align, bg=row_bg, fmt=fmt)
+        ws.row_dimensions[ri].height = 18
+
+    # Tổng cộng
+    total_row = len(closed) + 2
+    ws.row_dimensions[total_row].height = 22
+    _cell(ws.cell(total_row, 10), "TỔNG", bold=True, align="right")
+    c_total = ws.cell(total_row, 11)
+    _cell(c_total, total_sim, bold=True, align="right",
+          color=_GREEN if total_sim >= 0 else _RED,
+          bg=_BG_WIN if total_sim >= 0 else _BG_LOSS,
+          fmt='#,##0.00;[Red]-#,##0.00')
+
+    if closed:
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(closed) + 1}"
+
+
 # ── Entry point ──────────────────────────────────────────────────────────
-def build_excel(signals: list[dict]) -> bytes:
+def build_excel(signals: list[dict], sim_vol: float | None = None) -> bytes:
     """Tạo workbook Excel từ danh sách signals, trả về bytes."""
     wb = openpyxl.Workbook()
     wb.remove(wb.active)  # bỏ sheet mặc định
@@ -328,6 +393,8 @@ def build_excel(signals: list[dict]) -> bytes:
     _write_trades_sheet(wb, signals, "Kèo thua",
                         filter_fn=lambda s: s["status"] == "SL_HIT")
     _write_by_source(wb, signals)
+    if sim_vol is not None:
+        _write_sim_sheet(wb, signals, sim_vol)
 
     buf = io.BytesIO()
     wb.save(buf)
