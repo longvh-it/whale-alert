@@ -36,9 +36,9 @@ class Config:
 
     # Trend Detector (4h klines)
     trend_poll_interval: int = int(os.getenv("TREND_POLL_INTERVAL", "900"))   # 15 phút
-    trend_min_score: int = int(os.getenv("TREND_MIN_SCORE", "2"))              # indicator tối thiểu
+    trend_min_score: int = int(os.getenv("TREND_MIN_SCORE", "3"))              # indicator tối thiểu (3/3 TF)
     trend_atr_sl_mult: float = float(os.getenv("TREND_ATR_SL_MULT", "1.5"))   # SL = entry ± ATR * mult
-    trend_atr_tp_mult: float = float(os.getenv("TREND_ATR_TP_MULT", "3.0"))   # TP3 = entry ± ATR * mult
+    trend_atr_tp_mult: float = float(os.getenv("TREND_ATR_TP_MULT", "4.5"))   # TP3 = entry ± ATR * mult; TP1=1.5×ATR=1:1 R:R
 
     # Binance Futures WS
     binance_enabled: bool = os.getenv("BINANCE_ENABLED", "true").lower() == "true"
@@ -92,7 +92,7 @@ class Config:
     daily_loss_limit_enabled: bool = os.getenv("DAILY_LOSS_LIMIT_ENABLED", "true").lower() == "true"
 
     # Signal quality score
-    signal_min_quality_score: int = int(os.getenv("SIGNAL_MIN_QUALITY_SCORE", "50"))
+    signal_min_quality_score: int = int(os.getenv("SIGNAL_MIN_QUALITY_SCORE", "60"))
 
     # DOM (Order Book) Analysis
     dom_enabled: bool = os.getenv("DOM_ENABLED", "true").lower() == "true"

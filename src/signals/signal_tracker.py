@@ -956,9 +956,9 @@ class SignalTracker:
                 f"Auto-signal skipped: {coin} whale={direction} but multi_trend={multi_direction} ({confirmed}/3)"
             )
             return
-        if confirmed < 2:
+        if confirmed < config.trend_min_score:
             logger.debug(
-                f"Auto-signal skipped: {coin} multi-trend confirmed={confirmed}/3 < 2"
+                f"Auto-signal skipped: {coin} multi-trend confirmed={confirmed}/3 < {config.trend_min_score}"
             )
             return
 
