@@ -25,11 +25,11 @@ All config lives in `config/settings.py` as a single `Config` dataclass, loaded 
 Key variable groups:
 - **Whale thresholds**: `MIN_TRADE_SIZE_USD`, `MIN_POSITION_SIZE_USD`, `MIN_LIQUIDATION_SIZE_USD`
 - **Signal (kèo)**: `AUTO_SIGNAL_ENABLED`, `AUTO_SIGNAL_MIN_USD` (BTC/ETH), `AUTO_SIGNAL_MIN_USD_ALT` (altcoins), `AUTO_SIGNAL_MAJOR_COINS`
-- **Trend detector**: `TREND_POLL_INTERVAL_1H/4H/1D` (multi-timeframe), `TREND_MIN_SCORE` (default 2/3), `TREND_ATR_SL_MULT`, `TREND_ATR_TP_MULT`
+- **Trend detector**: `TREND_POLL_INTERVAL_1H/4H/1D` (multi-timeframe), `TREND_MIN_SCORE` (default 3/3), `TREND_ATR_SL_MULT` (default 1.5), `TREND_ATR_TP_MULT` (default 6.0 → TP1 R:R ≈ 1.33:1)
 - **Multi-source**: `BINANCE_ENABLED`, `BYBIT_ENABLED`, `OKX_ENABLED`, `OKX_SYMBOLS` (list), `COINGLASS_API_KEY`, `OI_SPIKE_THRESHOLD`, `FUNDING_EXTREME_HIGH/LOW`, `CONFLUENCE_ENABLED`, `CONFLUENCE_MIN_SCORE_WEIGHTED`
 - **TradingView webhook**: `TV_WEBHOOK_ENABLED`, `TV_WEBHOOK_PORT` (default 8080), `TV_WEBHOOK_SECRET` (validated via `X-TV-Secret` header or `?secret=` query param)
 - **Trend scanner**: `SCAN_ENABLED`, `SCAN_VOLUME_MIN` (default 2×), `SCAN_MIN_TREND_SCORE` (default 2/3), `SCAN_DAILY_MAX` (default 2), `SCAN_COIN_COOLDOWN_HOURS` (default 24)
-- **Signal lifecycle**: `REVERSAL_CUT_ENABLED`, `REVERSAL_MIN_SCORE`, `REVERSAL_GRACE_MINUTES`, `SIGNAL_PENDING_TIMEOUT_HOURS`, `DAILY_SL_LIMIT`, `DAILY_LOSS_LIMIT_ENABLED`, `SIGNAL_MIN_QUALITY_SCORE`
+- **Signal lifecycle**: `REVERSAL_CUT_ENABLED`, `REVERSAL_MIN_SCORE`, `REVERSAL_GRACE_MINUTES` (default 30 min), `SIGNAL_PENDING_TIMEOUT_HOURS`, `DAILY_SL_LIMIT` (default 2), `DAILY_LOSS_LIMIT_ENABLED`, `SIGNAL_MIN_QUALITY_SCORE` (default 65)
 - **DOM analysis**: `DOM_ENABLED`, `DOM_COINS`, `DOM_WALL_MIN_USD`, `DOM_WALL_DISTANCE_MAX_PCT`, `DOM_BID_ASK_BULLISH/BEARISH`, `DOM_ABSORPTION_PCT_THRESHOLD`, `DOM_BOOK_DEPTH_LEVELS`
 - **Ecosystem**: `ECOSYSTEM_ENABLED`, `ECOSYSTEM_VOLUME_SPIKE_MIN`, `ECOSYSTEM_CALL_MIN_TREND_SCORE`, `ECOSYSTEM_SIGNAL_QUALITY_PENALTY`
 - **Channel**: `SIGNAL_CHANNEL_ID` — Telegram channel where kèo are posted
@@ -94,12 +94,12 @@ TradingView Pine Script → HTTP POST → tv_webhook.py → maybe_create_tv_sign
 **`src/aggregator/confluence_scorer.py`** — In-memory buffer, groups signals by `(symbol, direction)` within `CONFLUENCE_WINDOW` seconds. Fires `CONFLUENCE` alert when `≥ CONFLUENCE_MIN_SOURCES` independent sources agree. Sources: `hyperliquid`, `binance`, `bybit`, `oi_spike`, `funding`, `liquidation`.
 
 **`src/signals/signal_tracker.py`** — Manages the kèo lifecycle:
-- `maybe_create_auto_signal()` — dedup (1 active kèo per coin), multi-timeframe trend gate, signal quality score gate (`SIGNAL_MIN_QUALITY_SCORE`), daily SL limit check, ATR-based TP/SL calculation
+- `maybe_create_auto_signal()` — dedup (1 active kèo per coin), multi-timeframe trend gate, RSI extreme filter (LONG: RSI ≤ 72, SHORT: RSI ≥ 28), MACD momentum gate (histogram must be growing), post-SL cooldown 4h per coin, signal quality score gate (`SIGNAL_MIN_QUALITY_SCORE`), daily SL limit check, ATR-based TP/SL calculation
 - `maybe_create_ecosystem_signal()` — same gates as above but called by `EcosystemDetector` with a quality penalty (`ECOSYSTEM_SIGNAL_QUALITY_PENALTY`)
 - `start_price_poll()` — REST polls every 5s, drives `_check_signals()` for TP/SL detection, reversal auto-cut, PENDING timeout cancellation
 - `_post_to_channel()` / `_edit_signal_message()` / `_send_hit_notification()` — Telegram messaging
 - Kèo status flow: `PENDING` → `ACTIVE` → `TP1_HIT` → `TP2_HIT` → `TP3_HIT` / `SL_HIT` / `CANCELLED`
-- **Dedup rule**: a coin is "blocked" only while status is `PENDING` or `ACTIVE`; once `TP1_HIT` or higher, a new kèo can be created
+- **Dedup rule**: a coin is "blocked" while status is `PENDING`, `ACTIVE`, or `TP1_HIT` (still running); once `TP2_HIT`/`TP3_HIT`/`SL_HIT`/`CANCELLED`, a new kèo can be created
 - **TP1 milestone**: `TP1_HIT` is not terminal — signal continues tracking TP2/TP3 with SL unchanged; sends a compact hit notification
 - **TP1 reversal cut**: after `TP1_HIT`, if reversal score ≥ 4, signal closes at entry price (breakeven) → `CANCELLED`
 - **Reversal auto-cut**: for `ACTIVE`/`TP2_HIT` signals, if opposite trend score ≥ `REVERSAL_MIN_SCORE` for `REVERSAL_GRACE_MINUTES`, signal is closed with `CANCELLED`
@@ -128,17 +128,21 @@ Key `signals` columns: `coin`, `direction` (LONG/SHORT), `entry_price`, `tp1/tp2
 ```
 whale trade arrives
   → size_usd >= threshold? (major vs altcoin)
-  → daily_sl_limit reached?  [blocks if too many SL hits today]
-  → db.has_active_signal(coin)?  [blocks if PENDING or ACTIVE]
+  → daily_sl_limit reached?  [blocks if ≥ DAILY_SL_LIMIT (2) SL hits today]
+  → db.has_active_signal(coin)?  [blocks if PENDING, ACTIVE, or TP1_HIT]
+  → post-SL cooldown? [blocks coin for 4h after any SL hit]
   → get_multi_trend(coin) direction == whale direction?
-  → confirmed_timeframes >= TREND_MIN_SCORE?
+  → confirmed_timeframes >= TREND_MIN_SCORE (3)?
+  → RSI extreme? [blocks if LONG & RSI > 72, or SHORT & RSI < 28]
+  → MACD momentum? [blocks if histogram shrinking in signal direction]
+  → DOM opposing? [blocks if strong opposite DOM signal]
   → compute quality_score (trend score, DOM confirm, confluence, etc.)
-  → quality_score >= SIGNAL_MIN_QUALITY_SCORE?
+  → quality_score >= SIGNAL_MIN_QUALITY_SCORE (65)?
   → compute TP/SL from ATR (trend_detector.atr)
   → create_and_post() → DB insert → post to SIGNAL_CHANNEL_ID
 ```
 
-TP/SL formula: `SL = entry ± ATR × TREND_ATR_SL_MULT`, `TP3 = entry ± ATR × TREND_ATR_TP_MULT`, TP1/TP2 at 1/3 and 2/3 of TP3 distance.
+TP/SL formula: `SL = entry ± ATR × 1.5`, `TP3 = entry ± ATR × 6.0`, TP1/TP2 at 1/3 and 2/3 of TP3 distance (TP1 R:R ≈ 1.33:1).
 
 ## src/skill/
 

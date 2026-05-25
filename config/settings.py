@@ -38,7 +38,7 @@ class Config:
     trend_poll_interval: int = int(os.getenv("TREND_POLL_INTERVAL", "900"))   # 15 phút
     trend_min_score: int = int(os.getenv("TREND_MIN_SCORE", "3"))              # indicator tối thiểu (3/3 TF)
     trend_atr_sl_mult: float = float(os.getenv("TREND_ATR_SL_MULT", "1.5"))   # SL = entry ± ATR * mult
-    trend_atr_tp_mult: float = float(os.getenv("TREND_ATR_TP_MULT", "4.5"))   # TP3 = entry ± ATR * mult; TP1=1.5×ATR=1:1 R:R
+    trend_atr_tp_mult: float = float(os.getenv("TREND_ATR_TP_MULT", "6.0"))   # TP3 = entry ± ATR * mult; TP1=2×ATR=1.33:1 R:R
 
     # Binance Futures WS
     binance_enabled: bool = os.getenv("BINANCE_ENABLED", "true").lower() == "true"
@@ -80,7 +80,7 @@ class Config:
     # Auto-cut on trend reversal
     reversal_cut_enabled: bool = os.getenv("REVERSAL_CUT_ENABLED", "true").lower() == "true"
     reversal_min_score: int = int(os.getenv("REVERSAL_MIN_SCORE", "4"))
-    reversal_grace_minutes: int = int(os.getenv("REVERSAL_GRACE_MINUTES", "60"))
+    reversal_grace_minutes: int = int(os.getenv("REVERSAL_GRACE_MINUTES", "30"))
     reversal_alt_min_score: int = int(os.getenv("REVERSAL_ALT_MIN_SCORE", "5"))
     reversal_check_interval: int = int(os.getenv("REVERSAL_CHECK_INTERVAL", "15"))
 
@@ -88,11 +88,11 @@ class Config:
     signal_pending_timeout_hours: float = float(os.getenv("SIGNAL_PENDING_TIMEOUT_HOURS", "4.0"))
 
     # Daily loss limit
-    daily_sl_limit: int = int(os.getenv("DAILY_SL_LIMIT", "3"))
+    daily_sl_limit: int = int(os.getenv("DAILY_SL_LIMIT", "2"))
     daily_loss_limit_enabled: bool = os.getenv("DAILY_LOSS_LIMIT_ENABLED", "true").lower() == "true"
 
     # Signal quality score
-    signal_min_quality_score: int = int(os.getenv("SIGNAL_MIN_QUALITY_SCORE", "60"))
+    signal_min_quality_score: int = int(os.getenv("SIGNAL_MIN_QUALITY_SCORE", "65"))
 
     # DOM (Order Book) Analysis
     dom_enabled: bool = os.getenv("DOM_ENABLED", "true").lower() == "true"

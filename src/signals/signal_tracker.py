@@ -132,6 +132,9 @@ class SignalTracker:
         self._scan_daily_date: str = ""
         self._scan_last_signal: dict[str, float] = {}  # coin → monotonic timestamp
 
+        # Post-SL cooldown per coin (4h block sau khi cắt lỗ)
+        self._sl_cooldown: dict[str, float] = {}       # coin → monotonic timestamp of SL hit
+
     # ── REST price poll loop ───────────────────────────────
     async def refresh_active_signals(self):
         """Edit lại tất cả tin nhắn signal đang PENDING/ACTIVE trong channel."""
@@ -250,6 +253,10 @@ class SignalTracker:
                 if terminal:
                     to_remove.append(keo)
                 await self._edit_signal_message(keo)
+
+                # Post-SL cooldown — block coin for 4h after SL hit
+                if new_status == "SL_HIT":
+                    self._sl_cooldown[keo["coin"].upper()] = time.monotonic()
 
                 # Task 1 — TP1 special handling
                 if new_status == "TP1_HIT":
@@ -860,6 +867,23 @@ class SignalTracker:
             if trend is None or trend.atr <= 0:
                 continue
 
+            # RSI extreme filter
+            if multi_direction == "LONG" and trend.rsi > 72:
+                continue
+            if multi_direction == "SHORT" and trend.rsi < 28:
+                continue
+
+            # MACD momentum gate
+            if multi_direction == "LONG" and trend.macd_hist < trend.macd_hist_prev:
+                continue
+            if multi_direction == "SHORT" and trend.macd_hist > trend.macd_hist_prev:
+                continue
+
+            # Post-SL cooldown
+            _SL_COOLDOWN_SECS = 4 * 3600
+            if time.monotonic() - self._sl_cooldown.get(coin.upper(), 0) < _SL_COOLDOWN_SECS:
+                continue
+
             # DOM check — block nếu DOM ngược chiều mạnh
             dom_snapshot = None
             if config.dom_enabled and coin in config.dom_coins:
@@ -966,6 +990,36 @@ class SignalTracker:
         trend = get_trend(coin)
         if trend is None:
             logger.debug(f"Auto-signal skipped: no 4h trend data for {coin}")
+            return
+
+        # RSI extreme filter — không vào khi momentum đã kiệt sức
+        if direction == "LONG" and trend.rsi > 72:
+            logger.debug(f"Auto-signal skipped: {coin} RSI={trend.rsi:.0f} overbought for LONG")
+            return
+        if direction == "SHORT" and trend.rsi < 28:
+            logger.debug(f"Auto-signal skipped: {coin} RSI={trend.rsi:.0f} oversold for SHORT")
+            return
+
+        # MACD momentum gate — histogram phải đang tăng theo chiều kèo
+        if direction == "LONG" and trend.macd_hist < trend.macd_hist_prev:
+            logger.debug(
+                f"Auto-signal skipped: {coin} MACD hist shrinking "
+                f"({trend.macd_hist:.4f} < {trend.macd_hist_prev:.4f}) for LONG"
+            )
+            return
+        if direction == "SHORT" and trend.macd_hist > trend.macd_hist_prev:
+            logger.debug(
+                f"Auto-signal skipped: {coin} MACD hist shrinking "
+                f"({trend.macd_hist:.4f} > {trend.macd_hist_prev:.4f}) for SHORT"
+            )
+            return
+
+        # Post-SL cooldown — block coin 4h sau khi cắt lỗ
+        _SL_COOLDOWN_SECS = 4 * 3600
+        last_sl = self._sl_cooldown.get(coin.upper(), 0)
+        if time.monotonic() - last_sl < _SL_COOLDOWN_SECS:
+            remaining = (_SL_COOLDOWN_SECS - (time.monotonic() - last_sl)) / 60
+            logger.info(f"Auto-signal skipped: {coin} trong cooldown sau SL ({remaining:.0f} phút còn lại)")
             return
 
         # Tính TP/SL: dùng ATR nếu có, fallback về % cố định
@@ -1154,6 +1208,26 @@ class SignalTracker:
         entry = self._prices.get(coin.upper())
         if not entry:
             logger.debug(f"TrendScanner signal skipped: chưa có giá cho {coin}")
+            return False
+
+        # RSI extreme filter
+        if direction == "LONG" and trend.rsi > 72:
+            logger.debug(f"TrendScanner skipped: {coin} RSI={trend.rsi:.0f} overbought")
+            return False
+        if direction == "SHORT" and trend.rsi < 28:
+            logger.debug(f"TrendScanner skipped: {coin} RSI={trend.rsi:.0f} oversold")
+            return False
+
+        # MACD momentum gate
+        if direction == "LONG" and trend.macd_hist < trend.macd_hist_prev:
+            return False
+        if direction == "SHORT" and trend.macd_hist > trend.macd_hist_prev:
+            return False
+
+        # Post-SL cooldown
+        _SL_COOLDOWN_SECS = 4 * 3600
+        if time.monotonic() - self._sl_cooldown.get(coin.upper(), 0) < _SL_COOLDOWN_SECS:
+            logger.debug(f"TrendScanner skipped: {coin} trong cooldown sau SL")
             return False
 
         quality = self._calc_signal_quality(
